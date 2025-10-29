@@ -1,0 +1,5 @@
+{
+  "room1": ["paintingA01.jpg","paintingA02.jpg","paintingA03.jpg","paintingA04.jpg","paintingA05.jpg","paintingA06.jpg","paintingA07.jpg","paintingA08.jpg","paintingA09.jpg","paintingA10.jpg","paintingA11.jpg","paintingA12.jpg","paintingA13.jpg","paintingA14.jpg","paintingA15.jpg","paintingA16.jpg","paintingA17.jpg","paintingA18.jpg"],
+  "room2": ["paintingG01.jpg","paintingG02.jpg","paintingG03.jpg","paintingG04.jpg","paintingG05.jpg","paintingG06.jpg","paintingG07.jpg","paintingG08.jpg","paintingG09.jpg","paintingG10.jpg","paintingG11.jpg"],
+  "room3": ["paintingS01.jpg","paintingS02.jpg","paintingS03.jpg","paintingS04.jpg","paintingS05.jpg","paintingS06.jpg","paintingS07.jpg","paintingS08.jpg","paintingS09.jpg","paintingS10.jpg","paintingS11.jpg","paintingS12.jpg"]
+}
