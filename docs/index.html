@@ -35,7 +35,7 @@ button, select, input{font-size:13px}
   <div><strong>3D-галерея</strong></div>
   <div style="font-size:13px;margin-top:6px">
     Комнаты: 1 (A*), 2 (G*), 3 (S*)<br/>
-    Управление: WASD + мышь. Клик на картину — приближение/описание.
+    Управление: WASD + мышь. Клик по картине — описание и приближение.
   </div>
   <div style="margin-top:8px">
     <label><input id="showLabels" type="checkbox" checked/> Показывать подписи</label>
@@ -69,35 +69,28 @@ const DESCRIPTIONS_PATH = ASSETS_BASE + 'descriptions.json';
 let scene, camera, renderer, controlsFP, controlsOrbit, currentControls;
 let raycaster = new THREE.Raycaster(), mouse = new THREE.Vector2();
 let paintingsGroup = new THREE.Group();
-let paintingPlanes = []; // { mesh, id, meta }
+let paintingPlanes = [];
 let INTERSECTED = null;
+let zoomTarget = null, zoomProgress = 0;
 const roomCount = 3;
-const roomSize = {w:12, h:4, d:12};
+const roomSize = { w: 12, h: 4, d: 12 };
 let loadTotal = 0, loadDone = 0;
-
-// --- New: approach target state (плавное приближение) ---
-let approachTarget = null; // {pos: Vector3, doneDistance: number, callback?:fn}
-const APPROACH_SPEED = 3.0; // units/sec
-
-// --- New: choose starting room (1..roomCount) ---
-const START_ROOM = 1; // можно 1,2 или 3
 
 init();
 
 async function init(){
   setLoadStatus('Загрузка файлов...');
   try{
-    const [manifest, descriptions] = await Promise.all([fetchJSON(MANIFEST_PATH), fetchJSON(DESCRIPTIONS_PATH)]);
+    const [manifest, descriptions] = await Promise.all([
+      fetchJSON(MANIFEST_PATH),
+      fetchJSON(DESCRIPTIONS_PATH)
+    ]);
 
     scene = new THREE.Scene();
     scene.background = new THREE.Color(0xdddddd);
 
     camera = new THREE.PerspectiveCamera(75, innerWidth/innerHeight, 0.1, 400);
-
-    // --- New: start position located at chosen room center (по оси X)
-    const gap = 2;
-    const roomCenterX = (START_ROOM - 1) * (roomSize.w + gap) - ((roomCount - 1) * (roomSize.w + gap)) / 2;
-    camera.position.set(roomCenterX, 1.6, 0);
+    camera.position.set(0, 1.6, 0);
 
     renderer = new THREE.WebGLRenderer({antialias:true});
     renderer.setSize(innerWidth, innerHeight);
@@ -110,6 +103,7 @@ async function init(){
     scene.add(amb, dir);
 
     const roomsGroup = new THREE.Group();
+    const gap = 2;
     for(let i=0;i<roomCount;i++){
       const room = new THREE.Group();
       const xOffset = i * (roomSize.w + gap);
@@ -126,11 +120,9 @@ async function init(){
 
     controlsFP = new PointerLockControls(camera, renderer.domElement);
     controlsOrbit = new OrbitControls(camera, renderer.domElement);
-    controlsOrbit.enableDamping = true;
     controlsOrbit.enabled = false;
     currentControls = controlsFP;
 
-    // Pointer lock on canvas click (only for FP mode)
     renderer.domElement.addEventListener('click', ()=>{
       if(document.getElementById('moveMode').value==='fp'){
         controlsFP.lock();
@@ -142,10 +134,7 @@ async function init(){
     document.addEventListener('mousemove', onMouseMove);
     document.addEventListener('click', onClick);
     document.getElementById('showLabels').addEventListener('change', ev=>toggleLabels(ev.target.checked));
-    document.getElementById('resetPos').addEventListener('click', ()=>{
-      camera.position.set(roomCenterX,1.6,0);
-      camera.rotation.set(0,0,0);
-    });
+    document.getElementById('resetPos').addEventListener('click', ()=>{ camera.position.set(0,1.6,0); camera.rotation.set(0,0,0); zoomTarget=null; });
     document.getElementById('moveMode').addEventListener('change', ev=>{ ev.target.value==='orbit'?switchOrbit():switchFP(); });
 
     setupWASD();
@@ -166,22 +155,36 @@ async function fetchJSON(url){
 function setLoadStatus(text){ const el=document.getElementById('loadStatus'); if(el) el.innerText=text; }
 
 function addRoomGeometry(room){
-  const floorColor=0xD2B48C, wallColor=0xE6E6E6, ceilingColor=0xFFFFFF;
-  const floorMat = new THREE.MeshStandardMaterial({color: floorColor, side: THREE.DoubleSide});
+  const floorColor = 0xD2B48C, wallColor = 0xE6E6E6, ceilingColor = 0xFFFFFF;
+
+  const floorMat = new THREE.MeshStandardMaterial({ color: floorColor, side: THREE.DoubleSide });
   const floor = new THREE.Mesh(new THREE.PlaneGeometry(roomSize.w, roomSize.d), floorMat);
-  floor.rotation.x = -Math.PI/2; floor.position.y=0; room.add(floor);
-  const ceilMat = new THREE.Mesh(new THREE.PlaneGeometry(roomSize.w, roomSize.d), ceilMat = new THREE.MeshStandardMaterial({color: ceilingColor, side: THREE.DoubleSide}));
-  const ceiling = new THREE.Mesh(new THREE.PlaneGeometry(roomSize.w, roomSize.d), ceilMat);
-  ceiling.rotation.x=Math.PI/2; ceiling.position.y=roomSize.h; room.add(ceiling);
-  const wallMat = new THREE.MeshStandardMaterial({color: wallColor, side: THREE.DoubleSide});
+  floor.rotation.x = -Math.PI / 2;
+  floor.position.y = 0;
+  room.add(floor);
+
+  const ceilingMat = new THREE.MeshStandardMaterial({ color: ceilingColor, side: THREE.DoubleSide });
+  const ceiling = new THREE.Mesh(new THREE.PlaneGeometry(roomSize.w, roomSize.d), ceilingMat);
+  ceiling.rotation.x = Math.PI / 2;
+  ceiling.position.y = roomSize.h;
+  room.add(ceiling);
+
+  const wallMat = new THREE.MeshStandardMaterial({ color: wallColor, side: THREE.DoubleSide });
   const wallBack = new THREE.Mesh(new THREE.PlaneGeometry(roomSize.w, roomSize.h), wallMat);
-  wallBack.position.set(0,roomSize.h/2,-roomSize.d/2);
+  wallBack.position.set(0, roomSize.h / 2, -roomSize.d / 2);
+
   const wallFront = new THREE.Mesh(new THREE.PlaneGeometry(roomSize.w, roomSize.h), wallMat);
-  wallFront.position.set(0,roomSize.h/2,roomSize.d/2); wallFront.rotateY(Math.PI);
+  wallFront.position.set(0, roomSize.h / 2, roomSize.d / 2);
+  wallFront.rotation.y = Math.PI;
+
   const wallLeft = new THREE.Mesh(new THREE.PlaneGeometry(roomSize.d, roomSize.h), wallMat);
-  wallLeft.position.set(-roomSize.w/2,roomSize.h/2,0); wallLeft.rotateY(Math.PI/2);
+  wallLeft.position.set(-roomSize.w / 2, roomSize.h / 2, 0);
+  wallLeft.rotation.y = Math.PI / 2;
+
   const wallRight = new THREE.Mesh(new THREE.PlaneGeometry(roomSize.d, roomSize.h), wallMat);
-  wallRight.position.set(roomSize.w/2,roomSize.h/2,0); wallRight.rotateY(-Math.PI/2);
+  wallRight.position.set(roomSize.w / 2, roomSize.h / 2, 0);
+  wallRight.rotation.y = -Math.PI / 2;
+
   room.add(wallBack, wallFront, wallLeft, wallRight);
 }
 
@@ -205,15 +208,14 @@ async function placePaintings(manifest, descriptions){
         const mat = new THREE.MeshStandardMaterial({map:tex});
         const plane = new THREE.Mesh(new THREE.PlaneGeometry(width,height), mat);
 
-        // compute wall & position
-        const perWall = Math.max(1, Math.ceil(list.length/4)); // >=1
-        const wallIndex = Math.floor(i/perWall)%4;
-        const indexOnWall = i%perWall;
+        const perWall=Math.ceil(list.length/4);
+        const wallIndex=Math.floor(i/perWall)%4;
+        const indexOnWall=i%perWall;
         const margin=0.5;
-        const usableLen = roomSize.w - 2*margin;
-        let along = -usableLen/2 + (indexOnWall + 0.5) * (usableLen / Math.max(1, perWall));
+        const usableLen=roomSize.w-2*margin;
+        let along=-usableLen/2 + (indexOnWall+0.5)*(usableLen/Math.max(1,perWall));
         const gap=2;
-        const roomCenterX = r*(roomSize.w+gap)-((3-1)*(roomSize.w+gap))/2;
+        const roomCenterX=r*(roomSize.w+gap)-((3-1)*(roomSize.w+gap))/2;
         let px=roomCenterX, pz=0, rotY=0, py=1.6;
         if(wallIndex===0){ px+=along; pz=-roomSize.d/2+0.01; rotY=0; }
         else if(wallIndex===1){ px+=along; pz=roomSize.d/2-0.01; rotY=Math.PI; }
@@ -223,7 +225,6 @@ async function placePaintings(manifest, descriptions){
         plane.position.set(px,py,pz); plane.rotation.y=rotY;
         plane.userData={file:fname,room:r+1,meta:descriptions[fname]||{}};
 
-        // frame (visual)
         const frameThickness=0.05, frameDepth=0.02;
         const frameGeom=new THREE.BoxGeometry(width+frameThickness,height+frameThickness,frameDepth);
         const frameMat=new THREE.MeshStandardMaterial({color:0x6b4226});
@@ -231,17 +232,11 @@ async function placePaintings(manifest, descriptions){
         frame.position.copy(plane.position); frame.rotation.copy(plane.rotation);
         frame.translateZ(-frameDepth/2-0.005);
 
-        // --- Important: copy userData to frame too, so clicks on frame work ---
-        frame.userData = plane.userData;
-
         const label=createLabel(fname);
         plane.userData.labelEl=label;
-        frame.userData.labelEl = label; // frame shares same label element
 
-        // add to scene and to internal arrays
-        paintingsGroup.add(frame);
-        paintingsGroup.add(plane);
-        paintingPlanes.push({mesh:plane, id: fname, meta: plane.userData.meta});
+        paintingsGroup.add(frame); paintingsGroup.add(plane);
+        paintingPlanes.push({mesh:plane,id:fname,meta:plane.userData.meta});
       }catch(err){ console.warn('Не удалось загрузить',url,err); }
       finally{ loadDone++; setLoadStatus(Math.round(loadDone/loadTotal*100)+'%'); }
     }
@@ -256,51 +251,26 @@ function createLabel(text){
 
 function toggleLabels(show){ paintingPlanes.forEach(p=>{ if(p.mesh.userData.labelEl)p.mesh.userData.labelEl.style.display=show?'block':'none'; }); }
 
-function onMouseMove(e){
-  // when pointer-locked, mouse events don't give clientX; keep last known when locked
-  if(document.pointerLockElement === renderer.domElement){
-    // do not update mouse coords while locked (keep center); raycasting on pointer lock would need center ray
-    // We'll allow raycasting only by screen center in FP mode when locked:
-    return;
-  }
-  mouse.x=(e.clientX/innerWidth)*2-1; mouse.y=-(e.clientY/innerHeight)*2+1;
+function onMouseMove(e){ mouse.x=(e.clientX/innerWidth)*2-1; mouse.y=-(e.clientY/innerHeight)*2+1; }
+
+function onClick(){ 
+  raycaster.setFromCamera(mouse,camera);
+  const intersects=raycaster.intersectObjects(paintingsGroup.children.filter(ch=>ch.geometry),true);
+  if(intersects.length>0) handlePaintingClick(intersects[0].object);
 }
 
-function onClick(e){
-  // compute ray: if pointer locked -> ray from screen center, otherwise from mouse
-  if(document.pointerLockElement === renderer.domElement){
-    mouse.set(0,0); // center
-  }
-  raycaster.setFromCamera(mouse,camera);
+function handlePaintingClick(obj){
+  if(!obj || !obj.userData) return;
+  showDescription(obj.userData);
 
-  // --- IMPORTANT: intersect only real painting planes (not frames or other decorations) ---
-  const targets = paintingPlanes.map(p=>p.mesh);
-  const intersects = raycaster.intersectObjects(targets, true);
+  const targetPos = new THREE.Vector3();
+  obj.getWorldPosition(targetPos);
+  const forward = new THREE.Vector3(0,0,1).applyQuaternion(obj.quaternion);
+  targetPos.addScaledVector(forward, 0.6); // на 60 см перед картиной
+  targetPos.y = 1.6;
 
-  if(intersects.length>0){
-    const hit = intersects[0].object;
-    const ud = hit.userData || hit.parent?.userData;
-    if(ud){
-      // Show description (same behavior as before)
-      showDescription(ud);
-
-      // Start approach: compute target point in front of painting
-      const normal = new THREE.Vector3(0,0,1).applyQuaternion(hit.getWorldQuaternion(new THREE.Quaternion())); // painting forward
-      // point a bit in front of plane:
-      const worldPos = new THREE.Vector3();
-      hit.getWorldPosition(worldPos);
-      const offsetDist = 0.9; // desired distance from painting (tweakable)
-      const approachPos = worldPos.clone().add(normal.clone().multiplyScalar(-offsetDist)); // move opposite to plane normal to stand before painting
-
-      // Keep camera height the same (eye-level)
-      approachPos.y = Math.max(1.2, camera.position.y);
-
-      approachTarget = { pos: approachPos, callback:()=>{ /* optionally open description or focus */ } };
-    }
-  } else {
-    // если кликнули не по картине — отменить цель приближения
-    approachTarget = null;
-  }
+  zoomTarget = targetPos;
+  zoomProgress = 0;
 }
 
 function showDescription(userData){
@@ -320,42 +290,25 @@ function animate(){
   requestAnimationFrame(animate);
   if(currentControls===controlsOrbit) controlsOrbit.update();
 
-  // approach logic: плавно перемещаем камеру к approachTarget.pos
-  if(approachTarget){
-    const dt = 1/60; // approximate
-    const dir = new THREE.Vector3().subVectors(approachTarget.pos, camera.position);
-    const dist = dir.length();
-    if(dist > 0.02){
-      const step = Math.min(dist, APPROACH_SPEED * dt);
-      dir.normalize().multiplyScalar(step);
-      camera.position.add(dir);
-
-      // rotate camera to look at painting smoothly
-      camera.lookAt(approachTarget.pos.x, approachTarget.pos.y, approachTarget.pos.z);
-    } else {
-      // reached
-      const cb = approachTarget.callback;
-      approachTarget = null;
-      if(cb) cb();
-    }
+  // эффект приближения к картине
+  if(zoomTarget){
+    zoomProgress += 0.03;
+    if(zoomProgress>=1){ zoomProgress=1; }
+    camera.position.lerp(zoomTarget, zoomProgress*0.05);
+    if(zoomProgress>0.98){ zoomTarget=null; }
   }
 
-  // highlight intersected painting under mouse (or center if locked)
-  if(document.pointerLockElement === renderer.domElement){
-    mouse.set(0,0); // center of screen
-  }
   raycaster.setFromCamera(mouse,camera);
-  const intersects = raycaster.intersectObjects(paintingPlanes.map(p=>p.mesh), true);
-
+  const intersects = raycaster.intersectObjects(paintingsGroup.children.filter(ch=>ch.material), true);
   if(intersects.length>0){
-    if(INTERSECTED !== intersects[0].object){
+    if(INTERSECTED!==intersects[0].object){
       if(INTERSECTED?.material?.emissive) INTERSECTED.material.emissive.setHex(0x000000);
-      INTERSECTED = intersects[0].object;
+      INTERSECTED=intersects[0].object;
       if(INTERSECTED?.material?.emissive) INTERSECTED.material.emissive.setHex(0x222222);
     }
-  } else {
+  }else{
     if(INTERSECTED?.material?.emissive) INTERSECTED.material.emissive.setHex(0x000000);
-    INTERSECTED = null;
+    INTERSECTED=null;
   }
 
   paintingPlanes.forEach(p=>{ if(p.mesh.userData.labelEl && p.mesh.visible) updateLabelPosition(p.mesh); });
@@ -385,8 +338,6 @@ function setupWASD(){
     if(e.code==='KeyS') move.back=true;
     if(e.code==='KeyA') move.left=true;
     if(e.code==='KeyD') move.right=true;
-    // ESC cancels approachTarget
-    if(e.code==='Escape') approachTarget = null;
   });
   document.addEventListener('keyup', e=>{
     if(e.code==='KeyW') move.forward=false;
@@ -401,12 +352,9 @@ function setupWASD(){
       const delta=0.016;
       direction.z=Number(move.forward)-Number(move.back);
       direction.x=Number(move.right)-Number(move.left);
-      // prevent movement while approaching
-      if(approachTarget) return;
+      direction.normalize();
       if(direction.lengthSq()>0){
-        direction.normalize();
-        // move relative to camera orientation
-        const moveVec = new THREE.Vector3(direction.x, 0, direction.z).multiplyScalar(speed*delta);
+        const moveVec=new THREE.Vector3(direction.x,0,direction.z).multiplyScalar(speed*delta);
         controlsFP.moveRight(moveVec.x);
         controlsFP.moveForward(moveVec.z);
         const obj=controlsFP.getObject();
