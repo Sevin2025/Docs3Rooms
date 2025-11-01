@@ -5,30 +5,31 @@
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <title>Виртуальная 3D-галерея — Sergeywieden</title>
 <style>
-  html,body{height:100%;margin:0;overflow:hidden;font-family:Arial,sans-serif;background:#eee}
-  #overlayUI{
-    position:fixed;right:12px;top:12px;z-index:60;background:rgba(255,255,255,0.95);
-    padding:8px;border-radius:6px;box-shadow:0 2px 10px rgba(0,0,0,.2);max-width:340px;
-  }
-  #descriptionBox{
-    position:fixed;left:12px;bottom:12px;z-index:70;
-    background:rgba(0,0,0,0.85);color:#fff;padding:12px;border-radius:6px;
-    max-width:40%;display:none;
-  }
-  #descTitle{font-weight:700;margin-bottom:6px}
-  #enterHint{
-    position:fixed;left:50%;bottom:40px;transform:translateX(-50%);z-index:65;
-    background:rgba(0,0,0,0.6);color:#fff;padding:8px 12px;border-radius:20px;
-  }
-  .paintingLabel{
-    pointer-events:none;
-    background:rgba(255,255,255,0.95);padding:4px 6px;border-radius:4px;font-size:12px;
-    position:fixed;transform:translate(-50%,-50%);white-space:nowrap;z-index:59;
-  }
-  canvas{display:block}
-  button, select, input{font-size:13px}
-  #roomButtons{margin-top:8px;display:flex;gap:6px;flex-wrap:wrap}
-  .door{opacity:0.9}
+html,body{height:100%;margin:0;overflow:hidden;font-family:Arial,sans-serif;background:#eee}
+#overlayUI{
+  position:fixed;right:12px;top:12px;z-index:20;background:rgba(255,255,255,0.95);
+  padding:8px;border-radius:6px;box-shadow:0 2px 10px rgba(0,0,0,.2);max-width:320px;
+}
+#descriptionBox{
+  position:fixed;left:12px;bottom:12px;z-index:30;
+  background:rgba(0,0,0,0.85);color:#fff;padding:12px;border-radius:6px;
+  max-width:40%;display:none;
+}
+#descTitle{font-weight:700;margin-bottom:6px}
+#enterHint{
+  position:fixed;left:50%;bottom:40px;transform:translateX(-50%);z-index:25;
+  background:rgba(0,0,0,0.6);color:#fff;padding:8px 12px;border-radius:20px;
+}
+.paintingLabel{
+  pointer-events:none;
+  background:rgba(255,255,255,0.95);padding:4px 6px;border-radius:4px;font-size:12px;
+  position:fixed;transform:translate(-50%,-50%);white-space:nowrap;z-index:19;
+}
+canvas{display:block}
+button, select, input{font-size:13px}
+.roomButtons{margin-top:8px;display:flex;gap:6px}
+.roomButtons button{padding:6px 8px;cursor:pointer}
+.roomButtons button.active{background:#333;color:#fff;border-radius:4px}
 </style>
 </head>
 <body>
@@ -37,12 +38,7 @@
   <div><strong>3D-галерея</strong></div>
   <div style="font-size:13px;margin-top:6px">
     Комнаты: 1 (A*), 2 (G*), 3 (S*)<br/>
-    Управление: WASD + мышь. Клик на картину — приближение/описание.
-  </div>
-  <div id="roomButtons">
-    <button data-room="1">В комнату 1</button>
-    <button data-room="2">В комнату 2</button>
-    <button data-room="3">В комнату 3</button>
+    Управление: WASD + мышь. Клик на картину — описание.
   </div>
   <div style="margin-top:8px">
     <label><input id="showLabels" type="checkbox" checked/> Показывать подписи</label>
@@ -58,6 +54,13 @@
       </select>
     </label>
   </div>
+
+  <div class="roomButtons" style="margin-top:6px">
+    <button id="btnRoom1" data-room="1" class="active">Комната 1</button>
+    <button id="btnRoom2" data-room="2">Комната 2</button>
+    <button id="btnRoom3" data-room="3">Комната 3</button>
+  </div>
+
   <div style="margin-top:6px;font-size:12px;color:#666">Загрузка: <span id="loadStatus">0%</span></div>
 </div>
 
@@ -65,87 +68,73 @@
 <div id="enterHint">Клик по сцене, чтобы начать (Pointer Lock). ESC — выйти.</div>
 
 <script type="module">
-import * as THREE from './assets/three/three.module.js';
-import { PointerLockControls } from './assets/three/PointerLockControls.js';
-import { OrbitControls } from './assets/three/OrbitControls.js';
+import * as THREE from 'https://unpkg.com/three@0.152.2/build/three.module.js';
+import { PointerLockControls } from 'https://unpkg.com/three@0.152.2/examples/jsm/controls/PointerLockControls.js';
+import { OrbitControls } from 'https://unpkg.com/three@0.152.2/examples/jsm/controls/OrbitControls.js';
 
-const ASSETS_BASE = './assets/';
+const ASSETS_BASE = './assets/'; 
 const MANIFEST_PATH = ASSETS_BASE + 'manifest.json';
 const DESCRIPTIONS_PATH = ASSETS_BASE + 'descriptions.json';
 
 let scene, camera, renderer, controlsFP, controlsOrbit, currentControls;
 let raycaster = new THREE.Raycaster(), mouse = new THREE.Vector2();
-let paintingsGroup = new THREE.Group();
-let paintingPlanes = [];
-let frameMeshes = [];
+let paintingsGroup = new THREE.Group();        // содержит все картины и рамки
+let paintingPlanes = [];                       // список плоскостей картин (для меток и поиска)
 let INTERSECTED = null;
-
 const roomCount = 3;
-const roomSizeByIndex = [
-  { w:6, h:4, d:18 }, // комната 1: узкая и длинная
-  { w:12, h:4, d:12 },
-  { w:12, h:4, d:12 }
-];
-
+const roomSize = {w:12, h:4, d:12};
 let loadTotal = 0, loadDone = 0;
-let cameraMove = null;
-let approach = null;
-const MOVE_DURATION = 0.8;
+let roomsGroup;                                // глобальная переменная для группы комнат
+let currentRoom = 1;
 
 init();
 
 async function init(){
   setLoadStatus('Загрузка файлов...');
   try{
-    const [manifest, descriptions] = await Promise.all([
-      fetchJSON(MANIFEST_PATH),
-      fetchJSON(DESCRIPTIONS_PATH)
-    ]);
+    const [manifest, descriptions] = await Promise.all([fetchJSON(MANIFEST_PATH), fetchJSON(DESCRIPTIONS_PATH)]);
 
     scene = new THREE.Scene();
     scene.background = new THREE.Color(0xdddddd);
 
     camera = new THREE.PerspectiveCamera(75, innerWidth/innerHeight, 0.1, 400);
-    const gap = 2;
-    const roomCenters = computeRoomCenters(roomSizeByIndex, gap);
-    camera.position.copy(roomCenters[1].clone().add(new THREE.Vector3(0,1.6,0)));
+    camera.position.set(0, 1.6, 0);
 
     renderer = new THREE.WebGLRenderer({antialias:true});
     renderer.setSize(innerWidth, innerHeight);
     renderer.outputEncoding = THREE.sRGBEncoding;
     document.body.appendChild(renderer.domElement);
 
-    const amb = new THREE.AmbientLight(0xffffff, 0.8);
+    const amb = new THREE.AmbientLight(0xffffff, 0.7);
     const dir = new THREE.DirectionalLight(0xffffff, 0.6);
     dir.position.set(5,10,5);
     scene.add(amb, dir);
 
-    const roomsGroup = new THREE.Group();
+    // создаём комнаты и сохраняем глобально
+    roomsGroup = new THREE.Group();
+    const gap = 2;
     for(let i=0;i<roomCount;i++){
-      const dims = roomSizeByIndex[i];
       const room = new THREE.Group();
-      const xOffset = i * (dims.w + gap);
+      const xOffset = i * (roomSize.w + gap);
       room.position.set(xOffset, 0, 0);
       room.name = `room${i+1}`;
-      addRoomGeometry(room, dims);
+      addRoomGeometry(room);
       roomsGroup.add(room);
     }
-    const totalWidth = roomSizeByIndex.reduce((s,d)=>s+d.w,0) + gap*(roomCount-1);
-    roomsGroup.position.x = - (totalWidth/2) + roomSizeByIndex[0].w/2;
+    roomsGroup.position.x = -((roomCount-1)*(roomSize.w+gap))/2;
     scene.add(roomsGroup);
 
-    addDoorsBetweenRooms(roomSizeByIndex, gap, roomsGroup.position.x);
-
-    await placePaintings(manifest, descriptions, roomCenters, gap);
+    // добавим группу картин отдельно (позиции картин рассчитаны глобально)
     scene.add(paintingsGroup);
+
+    await placePaintings(manifest, descriptions);
 
     controlsFP = new PointerLockControls(camera, renderer.domElement);
     controlsOrbit = new OrbitControls(camera, renderer.domElement);
-    controlsOrbit.enableDamping = true;
     controlsOrbit.enabled = false;
     currentControls = controlsFP;
 
-    renderer.domElement.addEventListener('click', ()=>{
+    renderer.domElement.addEventListener('click', ()=>{ 
       if(document.getElementById('moveMode').value==='fp'){
         controlsFP.lock();
         document.getElementById('enterHint').style.display='none';
@@ -156,22 +145,18 @@ async function init(){
     document.addEventListener('mousemove', onMouseMove);
     document.addEventListener('click', onClick);
     document.getElementById('showLabels').addEventListener('change', ev=>toggleLabels(ev.target.checked));
-    document.getElementById('resetPos').addEventListener('click', ()=>{ 
-      camera.position.copy(roomCenters[1].clone().add(new THREE.Vector3(0,1.6,0))); 
-      camera.quaternion.set(0,0,0,1); 
-    });
-    document.getElementById('moveMode').addEventListener('change', ev=>{ 
-      ev.target.value==='orbit'?switchOrbit():switchFP(); 
-    });
+    document.getElementById('resetPos').addEventListener('click', ()=>{ camera.position.set(0,1.6,0); camera.rotation.set(0,0,0); });
+    document.getElementById('moveMode').addEventListener('change', ev=>{ ev.target.value==='orbit'?switchOrbit():switchFP(); });
 
-    document.querySelectorAll('#roomButtons button').forEach(btn=>{
-      btn.addEventListener('click', ()=> {
-        const rid = Number(btn.dataset.room) - 1;
-        moveToRoom(rid);
-      });
-    });
+    // кнопки выбора комнаты
+    document.getElementById('btnRoom1').addEventListener('click', ()=>selectRoom(1));
+    document.getElementById('btnRoom2').addEventListener('click', ()=>selectRoom(2));
+    document.getElementById('btnRoom3').addEventListener('click', ()=>selectRoom(3));
 
     setupWASD();
+    // по умолчанию показываем комнату 1
+    selectRoom(1);
+
     animate();
     setLoadStatus('Готово');
   }catch(err){
@@ -180,323 +165,161 @@ async function init(){
   }
 }
 
-function computeRoomCenters(sizes, gap){
-  const centers = [];
-  let x=0;
-  for(let i=0;i<sizes.length;i++){
-    const w = sizes[i].w;
-    centers.push(new THREE.Vector3(x + w/2, 0, 0));
-    x += w + gap;
-  }
-  const totalWidth = sizes.reduce((s,d)=>s+d.w,0) + gap*(sizes.length-1);
-  const shift = - (totalWidth/2) + sizes[0].w/2;
-  centers.forEach(c=>c.x += shift);
-  return centers;
-}
-
 async function fetchJSON(url){
   const r = await fetch(url);
   if(!r.ok) throw new Error('Не удалось загрузить '+url);
   return r.json();
 }
 
-function setLoadStatus(text){ 
-  const el = document.getElementById('loadStatus'); 
-  if(el) el.innerText = text; 
+function setLoadStatus(text){ const el=document.getElementById('loadStatus'); if(el) el.innerText=text; }
+
+function addRoomGeometry(room){
+  const floorColor=0xD2B48C, wallColor=0xE6E6E6, ceilingColor=0xFFFFFF;
+  const floorMat = new THREE.MeshStandardMaterial({color: floorColor, side: THREE.DoubleSide});
+  const floor = new THREE.Mesh(new THREE.PlaneGeometry(roomSize.w, roomSize.d), floorMat);
+  floor.rotation.x = -Math.PI/2; floor.position.y=0; room.add(floor);
+  const ceilMat = new THREE.MeshStandardMaterial({color: ceilingColor, side: THREE.DoubleSide});
+  const ceiling = new THREE.Mesh(new THREE.PlaneGeometry(roomSize.w, roomSize.d), ceilMat);
+  ceiling.rotation.x=Math.PI/2; ceiling.position.y=roomSize.h; room.add(ceiling);
+  const wallMat = new THREE.MeshStandardMaterial({color: wallColor, side: THREE.DoubleSide});
+  const wallBack = new THREE.Mesh(new THREE.PlaneGeometry(roomSize.w, roomSize.h), wallMat);
+  wallBack.position.set(0,roomSize.h/2,-roomSize.d/2);
+  const wallFront = new THREE.Mesh(new THREE.PlaneGeometry(roomSize.w, roomSize.h), wallMat);
+  wallFront.position.set(0,roomSize.h/2,roomSize.d/2); wallFront.rotateY(Math.PI);
+  const wallLeft = new THREE.Mesh(new THREE.PlaneGeometry(roomSize.d, roomSize.h), wallMat);
+  wallLeft.position.set(-roomSize.w/2,roomSize.h/2,0); wallLeft.rotateY(Math.PI/2);
+  const wallRight = new THREE.Mesh(new THREE.PlaneGeometry(roomSize.d, roomSize.h), wallMat);
+  wallRight.position.set(roomSize.w/2,roomSize.h/2,0); wallRight.rotateY(-Math.PI/2);
+  room.add(wallBack, wallFront, wallLeft, wallRight);
 }
 
-function addRoomGeometry(room, dims){
-  const floorColor = 0xD2B48C;
-  const wallColor = 0xE6E6E6;
-  const ceilingColor = 0xFFFFFF;
-
-  const floorMat = new THREE.MeshStandardMaterial({ color: floorColor, side: THREE.DoubleSide });
-  const floor = new THREE.Mesh(new THREE.PlaneGeometry(dims.w, dims.d), floorMat);
-  floor.rotation.x = -Math.PI/2;
-  room.add(floor);
-
-  const ceilingMat = new THREE.MeshStandardMaterial({ color: ceilingColor, side: THREE.DoubleSide });
-  const ceiling = new THREE.Mesh(new THREE.PlaneGeometry(dims.w, dims.d), ceilingMat);
-  ceiling.rotation.x = Math.PI/2;
-  ceiling.position.y = dims.h;
-  room.add(ceiling);
-
-  const wallMat = new THREE.MeshStandardMaterial({ color: wallColor, side: THREE.DoubleSide });
-  const walls = [
-    {pos: [0, dims.h/2, -dims.d/2], rot: [0,0,0], size: [dims.w, dims.h]},
-    {pos: [0, dims.h/2, dims.d/2], rot: [0,Math.PI,0], size: [dims.w, dims.h]},
-    {pos: [-dims.w/2, dims.h/2, 0], rot: [0,Math.PI/2,0], size: [dims.d, dims.h]},
-    {pos: [dims.w/2, dims.h/2, 0], rot: [0,-Math.PI/2,0], size: [dims.d, dims.h]}
-  ];
-  walls.forEach(w => {
-    const geo = new THREE.PlaneGeometry(w.size[0], w.size[1]);
-    const mesh = new THREE.Mesh(geo, wallMat);
-    mesh.position.set(...w.pos);
-    mesh.rotation.set(...w.rot);
-    room.add(mesh);
-  });
-}
-
-function addDoorsBetweenRooms(sizes, gap, offsetX){
-  let xAcc = offsetX;
-  for(let i=0;i<sizes.length-1;i++){
-    const w1 = sizes[i].w;
-    const midX = xAcc + w1 + gap/2;
-    const doorHeight = 2.2, doorWidth = 1.6;
-    const doorGeom = new THREE.PlaneGeometry(doorWidth, doorHeight);
-    const doorMat = new THREE.MeshStandardMaterial({color:0x444444, side:THREE.DoubleSide, transparent:true, opacity:0.7});
-    const door = new THREE.Mesh(doorGeom, doorMat);
-    door.position.set(midX, doorHeight/2, 0);
-    door.rotation.y = Math.PI/2;
-    door.name = `door_${i+1}_${i+2}`;
-    door.userData = {type:'door', from:i, to:i+1};
-    scene.add(door);
-    frameMeshes.push(door);
-
-    const door2 = door.clone();
-    door2.position.set(midX, doorHeight/2, 0);
-    door2.rotation.y = -Math.PI/2;
-    door2.userData = {type:'door', from:i+1, to:i};
-    scene.add(door2);
-    frameMeshes.push(door2);
-
-    xAcc += w1 + gap;
-  }
-}
-
-async function placePaintings(manifest, descriptions, roomCenters, gap){
+async function placePaintings(manifest, descriptions){
   const loader = new THREE.TextureLoader();
-  const prefixes = ['A', 'G', 'S'];
-  loadTotal = 0; loadDone = 0;
+  const keys=['room1','room2','room3'];
+  loadTotal=0; loadDone=0; keys.forEach(k=>{ if(Array.isArray(manifest[k])) loadTotal+=manifest[k].length; });
+  if(loadTotal===0) loadTotal=1;
 
-  for(let r=0; r<3; r++){
-    const prefix = prefixes[r];
-    const list = (manifest[`room${r+1}`] || []).filter(f => f.startsWith(`painting${prefix}`));
-    const isRoom1 = r === 0;
-    const dims = roomSizeByIndex[r];
-    const perWall = Math.max(1, Math.ceil(list.length / 4));
-    loadTotal += list.length || (isRoom1 && list.length === 0 ? 4 : 0);
-
-    for(let i=0; i < (isRoom1 && list.length === 0 ? 4 : list.length); i++){
-      const isPlaceholder = isRoom1 && list.length === 0;
-      const fname = isPlaceholder ? null : list[i];
+  for(let r=0;r<3;r++){
+    const roomKey=keys[r];
+    const list=manifest[roomKey]||[];
+    for(let i=0;i<list.length;i++){
+      const fname=list[i];
+      const url=ASSETS_BASE+fname;
       try{
-        let width, height, mat, plane;
-        if(isPlaceholder){
-          height = 1.2; width = 0.9;
-          mat = new THREE.MeshStandardMaterial({ color: 0x8b5a2b });
-          plane = new THREE.Mesh(new THREE.PlaneGeometry(width, height), mat);
-        } else {
-          const url = ASSETS_BASE + fname;
-          const tex = await new Promise((res,rej)=>loader.load(url,res,undefined,rej));
-          tex.encoding = THREE.sRGBEncoding;
-          const aspect = tex.image.width / tex.image.height;
-          height = 1.0; width = Math.max(0.3, height * aspect);
-          mat = new THREE.MeshStandardMaterial({ map: tex });
-          plane = new THREE.Mesh(new THREE.PlaneGeometry(width, height), mat);
-        }
+        const tex=await new Promise((res,rej)=>loader.load(url,res,undefined,rej));
+        tex.encoding=THREE.sRGBEncoding;
+        const aspect = tex.image.width/tex.image.height;
+        const height = 1.0, width = Math.max(0.3,height*aspect);
+        const mat = new THREE.MeshStandardMaterial({map:tex});
+        const plane = new THREE.Mesh(new THREE.PlaneGeometry(width,height), mat);
 
-        const wallIndex = Math.floor(i / perWall) % 4;
-        const indexOnWall = i % perWall;
-        const margin = 0.5;
-        const usableLen = (wallIndex < 2 ? dims.w : dims.d) - 2*margin;
-        const along = -usableLen/2 + (indexOnWall + 0.5) * (usableLen / Math.max(1, perWall));
+        // расположение по стенам (по той же логике что и раньше)
+        const perWall=Math.ceil(list.length/4);
+        const wallIndex=Math.floor(i/perWall)%4;
+        const indexOnWall=i%perWall;
+        const margin=0.5;
+        const usableLen=roomSize.w-2*margin;
+        let along=-usableLen/2 + (indexOnWall+0.5)*(usableLen/Math.max(1,perWall));
+        const gap=2;
+        const roomCenterX=r*(roomSize.w+gap)-((roomCount-1)*(roomSize.w+gap))/2;
+        let px=roomCenterX, pz=0, rotY=0, py=1.6;
+        if(wallIndex===0){ px+=along; pz=-roomSize.d/2+0.01; rotY=0; }
+        else if(wallIndex===1){ px+=along; pz=roomSize.d/2-0.01; rotY=Math.PI; }
+        else if(wallIndex===2){ px=roomCenterX-roomSize.w/2+0.01; pz=along; rotY=Math.PI/2; }
+        else{ px=roomCenterX+roomSize.w/2-0.01; pz=along; rotY=-Math.PI/2; }
 
-        const roomCenterX = roomCenters[r].x;
-        let px = roomCenterX, pz = 0, rotY = 0, py = 1.6;
-        if(wallIndex === 0){ px += along; pz = -dims.d/2 + 0.01; rotY = 0; }
-        else if(wallIndex === 1){ px += along; pz = dims.d/2 - 0.01; rotY = Math.PI; }
-        else if(wallIndex === 2){ px = roomCenterX - dims.w/2 + 0.01; pz += along; rotY = Math.PI/2; }
-        else { px = roomCenterX + dims.w/2 - 0.01; pz += along; rotY = -Math.PI/2; }
+        plane.position.set(px,py,pz); plane.rotation.y=rotY;
+        plane.userData={file:fname,room:r+1,meta:descriptions[fname]||{}};
 
-        plane.position.set(px, py, pz);
-        plane.rotation.y = rotY;
-        plane.userData = { 
-          file: fname, 
-          room: r+1, 
-          meta: isPlaceholder ? {} : (descriptions[fname] || {}) 
-        };
+        const frameThickness=0.05, frameDepth=0.02;
+        const frameGeom=new THREE.BoxGeometry(width+frameThickness,height+frameThickness,frameDepth);
+        const frameMat=new THREE.MeshStandardMaterial({color:0x6b4226});
+        const frame=new THREE.Mesh(frameGeom,frameMat);
+        frame.position.copy(plane.position); frame.rotation.copy(plane.rotation);
+        frame.translateZ(-frameDepth/2-0.005);
+        // присваиваем frame тот же userData, чтобы клики на рамку тоже работали
+        frame.userData = Object.assign({}, plane.userData);
 
-        const frameThickness = 0.05, frameDepth = 0.02;
-        const frameGeom = new THREE.BoxGeometry(width + frameThickness, height + frameThickness, frameDepth);
-        const frameMat = new THREE.MeshStandardMaterial({ color: 0x6b4226 });
-        const frame = new THREE.Mesh(frameGeom, frameMat);
-        frame.position.copy(plane.position);
-        frame.rotation.copy(plane.rotation);
-        frame.translateZ(-frameDepth/2 - 0.005);
-        frame.userData = plane.userData;
+        // создаём DOM-метку
+        const label=createLabel(fname);
+        plane.userData.labelEl=label; frame.userData.labelEl=label;
 
-        const label = createLabel(isPlaceholder ? '' : fname.split('.')[0]);
-        plane.userData.labelEl = label;
-        frame.userData.labelEl = label;
+        // добавляем всё в общую группу картин
+        paintingsGroup.add(frame); paintingsGroup.add(plane);
 
-        paintingsGroup.add(frame, plane);
-        paintingPlanes.push({ mesh: plane, id: fname, meta: plane.userData.meta });
-        frameMeshes.push(frame);
-      }catch(err){
-        console.warn('Ошибка загрузки', fname, err);
-      }finally{
-        loadDone++;
-        setLoadStatus(Math.round(loadDone/loadTotal*100)+'%');
-      }
+        // запоминаем только плоскость картины для меток/описания (plane — основной объект)
+        paintingPlanes.push({mesh:plane,id:fname,meta:plane.userData.meta});
+
+      }catch(err){ console.warn('Не удалось загрузить',url,err); }
+      finally{ loadDone++; setLoadStatus(Math.round(loadDone/loadTotal*100)+'%'); }
     }
   }
 }
 
 function createLabel(text){
-  const el = document.createElement('div'); 
-  el.className='paintingLabel'; 
-  el.innerText = text || '';
-  el.style.display = document.getElementById('showLabels').checked ? 'block' : 'none';
-  document.body.appendChild(el);
-  return el;
+  const el=document.createElement('div'); el.className='paintingLabel'; el.innerText=text;
+  el.style.display=document.getElementById('showLabels').checked?'block':'none';
+  document.body.appendChild(el); return el;
 }
 
-function toggleLabels(show){
-  paintingPlanes.forEach(p => { 
-    if(p.mesh.userData.labelEl) 
-      p.mesh.userData.labelEl.style.display = show ? 'block' : 'none'; 
-  });
-}
+function toggleLabels(show){ paintingPlanes.forEach(p=>{ if(p.mesh.userData.labelEl)p.mesh.userData.labelEl.style.display=show?'block':'none'; }); }
 
-function onMouseMove(e){
-  if(document.pointerLockElement === renderer.domElement) return;
-  mouse.x = (e.clientX / innerWidth) * 2 - 1;
-  mouse.y = -(e.clientY / innerHeight) * 2 + 1;
-}
+function onMouseMove(e){ mouse.x=(e.clientX/innerWidth)*2-1; mouse.y=-(e.clientY/innerHeight)*2+1; }
 
-function onClick(e){
-  if(document.pointerLockElement === renderer.domElement){
-    mouse.set(0,0);
-  }
-  raycaster.setFromCamera(mouse, camera);
-
-  const picked = raycaster.intersectObjects(frameMeshes, true);
-  if(picked.length > 0){
-    const obj = picked[0].object;
-    if(obj.userData.type === 'door'){
-      moveToRoom(obj.userData.to);
-      return;
-    } else if(obj.userData.file || obj.userData.meta){
-      handlePaintingClick(obj);
-      return;
-    }
-  }
-
-  const intersects = raycaster.intersectObjects(paintingPlanes.map(p=>p.mesh), true);
-  if(intersects.length > 0){
-    handlePaintingClick(intersects[0].object);
-  } else {
-    approach = null;
+function onClick(){ 
+  // клики для описания картин
+  raycaster.setFromCamera(mouse,camera);
+  // пересекаем все объекты в группе картин
+  const intersects=raycaster.intersectObjects(paintingsGroup.children.filter(ch=>ch.geometry),true);
+  if(intersects.length>0){
+    // берём первый видимый объект, игнорируем невидимые
+    const first = intersects.find(iv=>iv.object.visible && iv.object.userData);
+    if(first) showDescription(first.object.userData);
   }
 }
 
-function handlePaintingClick(obj){
-  const ud = obj.userData;
-  if(ud.meta && Object.keys(ud.meta).length > 0){
-    showDescription(ud);
-  }
-  const worldPos = new THREE.Vector3();
-  obj.getWorldPosition(worldPos);
-  const worldQuat = new THREE.Quaternion();
-  obj.getWorldQuaternion(worldQuat);
-  const forward = new THREE.Vector3(0,0,1).applyQuaternion(worldQuat);
-  const distance = 1.0;
-  const targetPos = worldPos.clone().add(forward.clone().multiplyScalar(-distance));
-  targetPos.y = 1.6;
-  const lookAt = worldPos.clone(); lookAt.y = 1.6;
-  startApproach(targetPos, lookAt, 0.9);
+function showDescription(userData){
+  if(!userData)return;
+  const box=document.getElementById('descriptionBox');
+  document.getElementById('descTitle').innerText=userData.meta?.title||userData.file||'Картина';
+  const author=userData.meta?.author?('\nАвтор: '+userData.meta.author):'';
+  document.getElementById('descText').innerText=(userData.meta?.description||'Описание отсутствует')+author;
+  box.style.display='block';
+  setTimeout(()=>box.style.display='none',15000);
 }
 
-function showDescription(ud){
-  const box = document.getElementById('descriptionBox');
-  document.getElementById('descTitle').innerText = ud.meta?.title || ud.file || 'Картина';
-  const author = ud.meta?.author ? ('\nАвтор: '+ud.meta.author) : '';
-  document.getElementById('descText').innerText = (ud.meta?.description || 'Описание отсутствует') + author;
-  box.style.display = 'block';
-  setTimeout(()=>box.style.display='none', 14000);
-}
-
-function switchOrbit(){ controlsFP.unlock(); controlsOrbit.enabled=true; currentControls=controlsOrbit; }
+function switchOrbit(){ if(controlsFP.unlock) controlsFP.unlock(); controlsOrbit.enabled=true; currentControls=controlsOrbit; }
 function switchFP(){ controlsOrbit.enabled=false; currentControls=controlsFP; }
-
-function moveToRoom(roomIndex){
-  const rid = roomIndex;
-  if(rid < 0 || rid >= roomCount) return;
-  const gap = 2;
-  const centers = computeRoomCenters(roomSizeByIndex, gap);
-  const target = centers[rid].clone().add(new THREE.Vector3(0,1.6,0));
-  const lookAt = new THREE.Vector3(centers[rid].x, 1.6, 0);
-  startCameraMove(target, lookAt);
-}
-
-function startCameraMove(targetPos, lookAt){
-  const fromPos = camera.position.clone();
-  const toQuat = computeLookQuaternion(targetPos, lookAt);
-  const fromQuat = camera.quaternion.clone();
-  cameraMove = { from: fromPos, to: targetPos.clone(), quatFrom: fromQuat, quatTo: toQuat, t: 0, duration: MOVE_DURATION };
-}
-
-function startApproach(toPos, lookAt, duration=0.9){
-  approach = { toPos: toPos.clone(), lookAt: lookAt.clone(), t:0, duration: duration };
-}
-
-function computeLookQuaternion(fromPos, lookAt){
-  const dir = lookAt.clone().sub(fromPos).normalize();
-  const up = new THREE.Vector3(0,1,0);
-  const matrix = new THREE.Matrix4().lookAt(fromPos, lookAt, up);
-  return new THREE.Quaternion().setFromRotationMatrix(matrix);
-}
 
 function animate(){
   requestAnimationFrame(animate);
-  if(currentControls === controlsOrbit) controlsOrbit.update();
+  if(currentControls===controlsOrbit) controlsOrbit.update();
 
-  if(cameraMove){
-    cameraMove.t += 1/60 / cameraMove.duration;
-    const t = Math.min(1, cameraMove.t);
-    const tt = t * t * (3 - 2 * t);
-    camera.position.lerpVectors(cameraMove.from, cameraMove.to, tt);
-    
-    // ИСПРАВЛЕНО: slerp → slerpQuaternions
-    camera.quaternion.slerpQuaternions(cameraMove.quatFrom, cameraMove.quatTo, tt);
-
-    if(t >= 1) cameraMove = null;
-  }
-
-  if(approach){
-    approach.t += 1/60 / approach.duration;
-    const t = Math.min(1, approach.t);
-    const tt = t * t * (3 - 2 * t);
-    camera.position.lerpVectors(camera.position, approach.toPos, tt);
-    
-    const qTarget = computeLookQuaternion(camera.position, approach.lookAt);
-    
-    // ИСПРАВЛЕНО: slerp → slerpQuaternions
-    camera.quaternion.slerpQuaternions(camera.quaternion, qTarget, 0.12);
-
-    if(t >= 1) approach = null;
-  }
-
-  if(document.pointerLockElement === renderer.domElement){
-    mouse.set(0,0);
-  }
-  raycaster.setFromCamera(mouse, camera);
-
-  const intersects = raycaster.intersectObjects(paintingPlanes.map(p=>p.mesh), true);
-  if(intersects.length>0 && intersects[0].object.material.emissive){
-    if(INTERSECTED !== intersects[0].object){
-      if(INTERSECTED) INTERSECTED.material.emissive.setHex(0x000000);
-      INTERSECTED = intersects[0].object;
-      INTERSECTED.material.emissive.setHex(0x222222);
+  // подсветка наведённого
+  raycaster.setFromCamera(mouse,camera);
+  const intersects = raycaster.intersectObjects(paintingsGroup.children.filter(ch=>ch.material && ch.visible), true);
+  if(intersects.length>0){
+    if(INTERSECTED!==intersects[0].object){
+      if(INTERSECTED?.material?.emissive) INTERSECTED.material.emissive.setHex(0x000000);
+      INTERSECTED=intersects[0].object;
+      if(INTERSECTED?.material?.emissive) INTERSECTED.material.emissive.setHex(0x222222);
     }
-  } else {
-    if(INTERSECTED && INTERSECTED.material.emissive) INTERSECTED.material.emissive.setHex(0x000000);
-    INTERSECTED = null;
+  }else{
+    if(INTERSECTED?.material?.emissive) INTERSECTED.material.emissive.setHex(0x000000);
+    INTERSECTED=null;
   }
 
-  paintingPlanes.forEach(p => { if(p.mesh.userData.labelEl) updateLabelPosition(p.mesh); });
-  renderer.render(scene, camera);
+  // обновляем позиции меток только для видимых плоскостей
+  paintingPlanes.forEach(p=>{
+    if(p.mesh.userData.labelEl && p.mesh.visible){
+      updateLabelPosition(p.mesh);
+      p.mesh.userData.labelEl.style.display=document.getElementById('showLabels').checked?'block':'none';
+    } else if(p.mesh.userData.labelEl){
+      p.mesh.userData.labelEl.style.display='none';
+    }
+  });
+
+  renderer.render(scene,camera);
 }
 
 function updateLabelPosition(mesh){
@@ -507,25 +330,21 @@ function updateLabelPosition(mesh){
   pos.project(camera);
   const x = (pos.x*0.5+0.5)*innerWidth;
   const y = (-pos.y*0.5+0.5)*innerHeight;
-  el.style.left = x + 'px'; el.style.top = y + 'px';
+  el.style.left=x+'px'; el.style.top=y+'px';
 }
 
-function onResize(){
-  camera.aspect = innerWidth / innerHeight;
-  camera.updateProjectionMatrix();
-  renderer.setSize(innerWidth, innerHeight);
-}
+function onResize(){ camera.aspect=innerWidth/innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth,innerHeight); }
 
 function setupWASD(){
-  const move = { forward:false, back:false, left:false, right:false };
-  const speed = 3.0;
+  const move={forward:false,back:false,left:false,right:false};
+  const direction=new THREE.Vector3();
+  const speed=3.0;
 
   document.addEventListener('keydown', e=>{
     if(e.code==='KeyW') move.forward=true;
     if(e.code==='KeyS') move.back=true;
     if(e.code==='KeyA') move.left=true;
     if(e.code==='KeyD') move.right=true;
-    if(e.code==='Escape'){ approach = null; cameraMove = null; controlsFP.unlock(); }
   });
   document.addEventListener('keyup', e=>{
     if(e.code==='KeyW') move.forward=false;
@@ -536,23 +355,63 @@ function setupWASD(){
 
   (function tick(){
     requestAnimationFrame(tick);
-    if(currentControls === controlsFP && controlsFP.isLocked){
-      const delta = 0.016;
-      const dir = new THREE.Vector3(
-        Number(move.right) - Number(move.left),
-        0,
-        Number(move.forward) - Number(move.back)
-      );
-      if(dir.lengthSq() > 0){
-        dir.normalize().multiplyScalar(speed * delta);
-        controlsFP.moveRight(dir.x);
-        controlsFP.moveForward(dir.z);
-        const obj = controlsFP.getObject();
-        obj.position.y = 1.6;
+    if(currentControls===controlsFP && controlsFP.isLocked===true){
+      const delta=0.016;
+      direction.z=Number(move.forward)-Number(move.back);
+      direction.x=Number(move.right)-Number(move.left);
+      direction.normalize();
+      if(direction.lengthSq()>0){
+        const moveVec=new THREE.Vector3(direction.x,0,direction.z).multiplyScalar(speed*delta);
+        controlsFP.moveRight(moveVec.x);
+        controlsFP.moveForward(moveVec.z);
+        const obj=controlsFP.getObject();
+        obj.position.y=Math.max(1.0,obj.position.y);
       }
     }
   })();
 }
+
+/* ---------- функция переключения комнат ---------- 
+   Действия:
+    - скрыть все картины/рамки, кроме тех, что в нужной комнате
+    - обновить активную кнопку
+    - переместить камеру в центр выбранной комнаты (с небольшим отступом назад)
+*/
+function selectRoom(n){
+  currentRoom = n;
+  // прячем/показываем картины и рамки по userData.room
+  paintingsGroup.children.forEach(ch=>{
+    const r = ch.userData?.room;
+    if(typeof r === 'number'){
+      ch.visible = (r === n);
+    } else {
+      // объекты без userData.room оставляем видимыми (на всякий случай)
+      ch.visible = true;
+    }
+  });
+
+  // обновляем видимость меток
+  paintingPlanes.forEach(p=>{
+    if(p.mesh.userData.labelEl){
+      p.mesh.userData.labelEl.style.display = (p.mesh.userData.room === n && document.getElementById('showLabels').checked) ? 'block' : 'none';
+    }
+  });
+
+  // поставить камеру в центр комнаты (немного отодвинуть назад от центра)
+  const gap = 2;
+  const roomCenterX = (n-1)*(roomSize.w+gap) - ((roomCount-1)*(roomSize.w+gap))/2;
+  // камеру ставим на 0, 1.6, + (d/2 - 1.5) чтобы смотреть внутрь комнаты
+  camera.position.set(roomCenterX, 1.6, roomSize.d/2 - 1.8);
+  // направим камеру в центр комнаты
+  camera.lookAt(new THREE.Vector3(roomCenterX, 1.6, 0));
+
+  // обновляем кнопки UI
+  [1,2,3].forEach(i=>{
+    const b = document.getElementById('btnRoom'+i);
+    if(b) b.classList.toggle('active', i===n);
+  });
+}
+
 </script>
 </body>
 </html>
