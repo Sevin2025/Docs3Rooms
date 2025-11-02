@@ -25,7 +25,7 @@ button:hover{background:#666}
   <div id="descText" style="white-space:pre-wrap"></div>
 </div>
 
-<div id="enterHint">Кликните по сцене для входа (WASD + Q/E для разворота)</div>
+<div id="enterHint">Кликните по сцене для входа (WASD / стрелки + мышь)</div>
 
 <script type="module">
 import * as THREE from './assets/three/three.module.js';
@@ -37,26 +37,26 @@ const DESCRIPTIONS = ASSETS + 'descriptions.json';
 let scene, camera, renderer, raycaster;
 let paintingPlanes = [];
 let labelsVisible = true;
-let isLocked = false;
-let yaw = 0;
-let targetYaw = 0;
-let move = {w:0,s:0,a:0,d:0,q:0,e:0};
 let currentTarget = null;
+let returnTarget = null;
+let yaw = 0;
 let moveToTarget = false;
+let isLocked = false;
+let move = {w:0,s:0,a:0,d:0};
 
 init();
 
 async function init(){
   const [manifest, descriptions] = await Promise.all([
     fetchJSON(MANIFEST),
-    fetchJSON(DESCRIPTIONS)
+    fetchJSON(DESCRIPTIONS).catch(()=> ({}))
   ]);
 
   scene = new THREE.Scene();
   scene.background = new THREE.Color(0xdddddd);
 
   camera = new THREE.PerspectiveCamera(75, innerWidth/innerHeight, 0.1, 200);
-  camera.position.set(0, 2, 0); // высота камеры 2 м
+  camera.position.set(0, 1.6, 0);
 
   renderer = new THREE.WebGLRenderer({antialias:true});
   renderer.setSize(innerWidth, innerHeight);
@@ -74,25 +74,47 @@ async function init(){
   raycaster = new THREE.Raycaster();
 
   renderer.domElement.addEventListener('click', ()=> {
-    if (!isLocked) {
+    if(!isLocked){
       isLocked = true;
       document.getElementById("enterHint").style.display="none";
     }
   });
 
-  // Управление движением
-  document.addEventListener('keydown',e=>{
-    const k=e.key.toLowerCase();
-    if(k in move) move[k]=1;
-  });
-  document.addEventListener('keyup',e=>{
-    const k=e.key.toLowerCase();
-    if(k in move) move[k]=0;
+  document.addEventListener('mousemove', e=>{
+    if(!isLocked) return;
+    yaw -= e.movementX * 0.002;
+    camera.rotation.set(0, yaw, 0);
   });
 
-  // Клик — поворот, двойной клик — приближение
-  document.addEventListener('click', e=>onClick(e,false));
-  document.addEventListener('dblclick', e=>onClick(e,true));
+  document.addEventListener('keydown',e=>{
+    const key = e.key.toLowerCase();
+    if(move[key]!==undefined) move[key]=1;
+
+    // стрелки
+    if(e.key==="ArrowUp") move.w=1;
+    if(e.key==="ArrowDown") move.s=1;
+    if(e.key==="ArrowLeft") move.a=1;
+    if(e.key==="ArrowRight") move.d=1;
+
+    // пробел — отход от картины
+    if(e.key===" "){ returnFromPainting(); }
+
+    // Esc — выход из режима приближения / возвращение в центр
+    if(e.key==="Escape"){ exitToCenter(); }
+  });
+
+  document.addEventListener('keyup',e=>{
+    const key = e.key.toLowerCase();
+    if(move[key]!==undefined) move[key]=0;
+    if(e.key==="ArrowUp") move.w=0;
+    if(e.key==="ArrowDown") move.s=0;
+    if(e.key==="ArrowLeft") move.a=0;
+    if(e.key==="ArrowRight") move.d=0;
+  });
+
+  document.addEventListener('click', onClick);
+  document.addEventListener('dblclick', onDblClick);
+  window.addEventListener('resize', onResize);
 
   document.getElementById('toggleLabels').addEventListener('click',()=>{
     labelsVisible = !labelsVisible;
@@ -102,15 +124,16 @@ async function init(){
     });
   });
 
+  moveLoop();
   animate();
 }
 
 function addRoom(){
-  const w=12,h=6,d=12;
+  const w=30,h=6,d=30;
   const floorMat = new THREE.MeshStandardMaterial({color:0xD2B48C, side:THREE.DoubleSide});
+  const ceilMat  = new THREE.MeshStandardMaterial({color:0xffffff, side:THREE.DoubleSide});
   const wallMat  = new THREE.MeshStandardMaterial({color:0xE6E6E6, side:THREE.DoubleSide});
   const backMat  = new THREE.MeshStandardMaterial({color:0x555555, side:THREE.DoubleSide});
-  const ceilMat  = new THREE.MeshStandardMaterial({color:0xffffff, side:THREE.DoubleSide});
 
   const floor = new THREE.Mesh(new THREE.PlaneGeometry(w,d), floorMat);
   floor.rotation.x = -Math.PI/2; scene.add(floor);
@@ -134,15 +157,16 @@ function addRoom(){
 async function addPaintings(manifest, descriptions){
   const loader = new THREE.TextureLoader();
   const sets = [
-    { key:'room1', x:-5.9, rotY:Math.PI/2 },
-    { key:'room2', z:-5.9, rotY:0 },
-    { key:'room3', x:5.9, rotY:-Math.PI/2 }
+    { key:'room1', x:-14.9, rotY:Math.PI/2 },
+    { key:'room2', z:-14.9, rotY:0 },
+    { key:'room3', x:14.9, rotY:-Math.PI/2 }
   ];
 
   for(const s of sets){
     const list = manifest[s.key] || [];
-    let offset = 0.8; // отступ от угла
-    for(const file of list){
+    let currentOffset = -10;
+    for(let i=0;i<list.length;i++){
+      const file = list[i];
       const meta = descriptions[file] || {};
       const width = meta.width || 1.5;
       const height = meta.height || 1.0;
@@ -153,20 +177,32 @@ async function addPaintings(manifest, descriptions){
       const mat = new THREE.MeshStandardMaterial({map:tex});
       const mesh = new THREE.Mesh(new THREE.PlaneGeometry(width,height), mat);
 
-      if(s.x!==undefined){ mesh.position.x = s.x; mesh.position.z = -5.9 + offset + width/2; }
-      if(s.z!==undefined){ mesh.position.z = s.z; mesh.position.x = -5.9 + offset + width/2; }
+      const gap = 1.2;
+      currentOffset += width/2;
+      if(s.x!==undefined) mesh.position.x = s.x;
+      if(s.z!==undefined) mesh.position.z = s.z;
+      if(s.key==='room1'||s.key==='room3') mesh.position.z = currentOffset;
+      if(s.key==='room2') mesh.position.x = currentOffset;
       mesh.position.y = 2;
       mesh.rotation.y = s.rotY;
 
-      mesh.userData = {file, meta};
+      const frameGeom = new THREE.BoxGeometry(width+0.2,height+0.2,0.1);
+      const frameMat = new THREE.MeshStandardMaterial({color:0x6b4226});
+      const frame = new THREE.Mesh(frameGeom, frameMat);
+      frame.position.copy(mesh.position);
+      frame.rotation.copy(mesh.rotation);
+      frame.translateZ(-0.08);
+
+      mesh.translateZ(0.02);
+      mesh.userData = {file, meta, wall:s.key};
       const label = createLabel(meta.title || file);
       mesh.userData.label = label;
 
+      scene.add(frame);
       scene.add(mesh);
       paintingPlanes.push(mesh);
 
-      offset += width + 0.8;
-      if(offset > 10) break;
+      currentOffset += width/2 + gap;
     }
   }
 }
@@ -179,20 +215,93 @@ function createLabel(text){
   return el;
 }
 
-function onClick(e, isDouble){
+function moveLoop(){
+  requestAnimationFrame(moveLoop);
+  if(!isLocked) return;
+
+  const dir = new THREE.Vector3(move.d-move.a,0,move.s-move.w);
+  if(dir.lengthSq()>0){
+    dir.normalize();
+    const speed = 0.1;
+    const sin = Math.sin(yaw), cos = Math.cos(yaw);
+    const moveX = (dir.x*cos - dir.z*sin)*speed;
+    const moveZ = (dir.x*sin + dir.z*cos)*speed;
+
+    const newX = camera.position.x + moveX;
+    const newZ = camera.position.z + moveZ;
+
+    // не выходить за стены
+    if(Math.abs(newX) < 14.5) camera.position.x = newX;
+    if(Math.abs(newZ) < 14.5) camera.position.z = newZ;
+  }
+}
+
+function onClick(){
+  if(!isLocked) return;
   raycaster.setFromCamera({x:0,y:0},camera);
   const hits = raycaster.intersectObjects(paintingPlanes,true);
   if(hits.length>0){
-    const obj = hits[0].object;
-    const pos = new THREE.Vector3(); obj.getWorldPosition(pos);
-    const quat = new THREE.Quaternion(); obj.getWorldQuaternion(quat);
-    const forward = new THREE.Vector3(0,0,1).applyQuaternion(quat);
-    const toPos = pos.clone().add(forward.clone().multiplyScalar(-0.8)); // минимальная дистанция 0.8 м
-    toPos.y = 2;
-    currentTarget = {obj:obj, pos:pos, to:toPos};
-    moveToTarget = isDouble;
+    const obj=hits[0].object;
+    rotateCameraToPainting(obj);
     showDescription(obj.userData);
   }
+}
+
+function onDblClick(){
+  if(!isLocked) return;
+  raycaster.setFromCamera({x:0,y:0},camera);
+  const hits = raycaster.intersectObjects(paintingPlanes,true);
+  if(hits.length>0){
+    const obj=hits[0].object;
+    approachPainting(obj);
+    showDescription(obj.userData);
+  }
+}
+
+function rotateCameraToPainting(obj){
+  const pos = new THREE.Vector3(); obj.getWorldPosition(pos);
+  const dir = pos.clone().sub(camera.position).normalize();
+  const targetYaw = Math.atan2(dir.x, dir.z);
+  smoothYawTo(targetYaw);
+}
+
+function smoothYawTo(targetYaw){
+  const diff = targetYaw - yaw;
+  const normDiff = Math.atan2(Math.sin(diff), Math.cos(diff));
+  const step = normDiff * 0.15;
+  yaw += step;
+  camera.rotation.set(0, yaw, 0);
+}
+
+function approachPainting(obj){
+  const pos = new THREE.Vector3(); obj.getWorldPosition(pos);
+  const quat = new THREE.Quaternion(); obj.getWorldQuaternion(quat);
+  const forward = new THREE.Vector3(0,0,1).applyQuaternion(quat);
+  const toPos = pos.clone().add(forward.clone().multiplyScalar(-1));
+  toPos.y = 1.6;
+  currentTarget = {pos:pos,to:toPos};
+  moveToTarget = true;
+}
+
+function returnFromPainting(){
+  if(!currentTarget) return;
+  const backWallYaw = yaw + Math.PI;
+  smoothYawTo(backWallYaw);
+  const retreat = new THREE.Vector3(
+    camera.position.x - Math.sin(yaw)*2,
+    1.6,
+    camera.position.z - Math.cos(yaw)*2
+  );
+  returnTarget = retreat;
+  currentTarget = null;
+}
+
+function exitToCenter(){
+  // возврат в центр и разворот влево (к room1)
+  currentTarget = null;
+  returnTarget = new THREE.Vector3(0,1.6,0);
+  const targetYaw = Math.PI/2;
+  smoothYawTo(targetYaw);
 }
 
 function showDescription(data){
@@ -200,41 +309,27 @@ function showDescription(data){
   document.getElementById('descTitle').innerText=data.meta.title||data.file;
   document.getElementById('descText').innerText=(data.meta.description||'Описание отсутствует')+(data.meta.author?`\nАвтор: ${data.meta.author}`:'');
   box.style.display='block';
-  setTimeout(()=>box.style.display='none',8000);
+  setTimeout(()=>box.style.display='none',10000);
 }
 
 function animate(){
   requestAnimationFrame(animate);
 
-  if(isLocked){
-    const speed = 0.05;
-    const dir = new THREE.Vector3();
-
-    if(move.w) dir.z -= speed;
-    if(move.s) dir.z += speed;
-    if(move.a) dir.x -= speed;
-    if(move.d) dir.x += speed;
-
-    const sin = Math.sin(yaw);
-    const cos = Math.cos(yaw);
-    camera.position.x += dir.x * cos - dir.z * sin;
-    camera.position.z += dir.x * sin + dir.z * cos;
-
-    camera.position.x = Math.max(-5.5, Math.min(5.5, camera.position.x));
-    camera.position.z = Math.max(-5.5, Math.min(5.5, camera.position.z));
-
-    // Повороты Q/E строго на 90°
-    if(move.q){ targetYaw += Math.PI/2; move.q=0; }
-    if(move.e){ targetYaw -= Math.PI/2; move.e=0; }
+  if (currentTarget && moveToTarget) {
+    const dir = new THREE.Vector3().subVectors(currentTarget.to, camera.position);
+    if (dir.length() > 0.05) {
+      camera.position.addScaledVector(dir.normalize(), 0.05);
+      rotateCameraToPainting({getWorldPosition:(v)=>v.copy(currentTarget.pos)});
+    } else moveToTarget = false;
   }
 
-  yaw += (targetYaw - yaw) * 0.1;
-  camera.rotation.set(0, yaw, 0);
-
-  // Приближение к выбранной картине
-  if (currentTarget && moveToTarget){
-    const dir = new THREE.Vector3().subVectors(currentTarget.to, camera.position);
-    if (dir.length() > 0.05) camera.position.addScaledVector(dir.normalize(), 0.05);
+  if (returnTarget) {
+    const dir = new THREE.Vector3().subVectors(returnTarget, camera.position);
+    if (dir.length() > 0.05) {
+      camera.position.addScaledVector(dir.normalize(), 0.04);
+    } else {
+      returnTarget = null;
+    }
   }
 
   updateLabels();
@@ -251,6 +346,12 @@ function updateLabels(){
     p.userData.label.style.left=x+'px';
     p.userData.label.style.top=y+'px';
   });
+}
+
+function onResize(){
+  camera.aspect=innerWidth/innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth,innerHeight);
 }
 
 async function fetchJSON(url){
