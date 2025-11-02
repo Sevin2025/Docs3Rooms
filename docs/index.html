@@ -3,21 +3,29 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>3D Галерея — Docs3Rooms</title>
+<title>3D Галерея</title>
 <style>
 html,body{margin:0;height:100%;overflow:hidden;background:#eee;font-family:Arial,sans-serif}
 canvas{display:block}
-#ui{position:fixed;right:12px;top:12px;z-index:20;background:rgba(255,255,255,0.95);padding:8px 12px;border-radius:8px;box-shadow:0 2px 10px rgba(0,0,0,.2);}
-button{cursor:pointer;font-size:14px;padding:6px 10px;border-radius:6px;border:none;background:#444;color:#fff;}
+#ui{position:fixed;right:12px;top:12px;z-index:20;background:rgba(255,255,255,0.95);padding:12px 16px;border-radius:12px;box-shadow:0 3px 10px rgba(0,0,0,.2);min-width:180px;}
+button{cursor:pointer;font-size:14px;padding:6px 10px;border-radius:6px;border:none;background:#444;color:#fff;margin:3px;}
 button:hover{background:#666}
 .paintingLabel{pointer-events:none;background:rgba(255,255,255,0.95);padding:4px 6px;border-radius:4px;font-size:12px;position:fixed;transform:translate(-50%,-50%);white-space:nowrap;z-index:10;}
 #descriptionBox{position:fixed;left:12px;bottom:12px;z-index:30;background:rgba(0,0,0,0.85);color:#fff;padding:12px;border-radius:8px;max-width:40%;display:none;}
 #enterHint{position:fixed;left:50%;bottom:40px;transform:translateX(-50%);background:rgba(0,0,0,0.6);color:#fff;padding:8px 12px;border-radius:20px;}
+.rangeLabel{font-size:12px;margin-top:4px;color:#333;}
 </style>
 </head>
 <body>
 <div id="ui">
-  <button id="toggleLabels">Скрыть названия</button>
+  <button id="toggleLabels">Скрыть названия</button><br>
+  <button id="leftStep">⬅️ Влево</button>
+  <button id="rightStep">➡️ Вправо</button>
+  <button id="centerBtn">🔄 Центр</button>
+  <div class="rangeLabel">Скорость вращения</div>
+  <input id="rotSpeed" type="range" min="0.2" max="2" step="0.1" value="1">
+  <div class="rangeLabel">Направление</div>
+  <select id="rotDir"><option value="cw">По часовой</option><option value="ccw">Против</option></select>
 </div>
 
 <div id="descriptionBox">
@@ -36,511 +44,258 @@ const DESCRIPTIONS = ASSETS + 'descriptions.json';
 
 let scene, camera, renderer, raycaster;
 let paintingPlanes = [];
-let labelsVisible = true;
-let isLocked = false;
-let yaw = 0;
+let yaw = Math.PI/2;
 let move = {w:0,s:0,a:0,d:0};
-let approachState = null; // {type:'to'|'retreat'|'center', targetVec, spinAnimator}
-let room = {}; // room dimensions and bounds
+let isLocked = false;
+let rotateAnim = null;
+let currentTarget = null;
+let labelsVisible = true;
+let rotSpeed = 1;
+let rotDir = 1;
 
 init();
 
 async function init(){
   const [manifest, descriptions] = await Promise.all([
-    fetchJSON(MANIFEST).catch(()=>({room1:[],room2:[],room3:[] })),
-    fetchJSON(DESCRIPTIONS).catch(()=>({}))
+    fetchJSON(MANIFEST),
+    fetchJSON(DESCRIPTIONS).catch(()=> ({}))
   ]);
+
+  // ---------- Комната по данным ----------
+  const allFiles = Object.values(manifest).flat();
+  const allMeta = allFiles.map(f=>descriptions[f]||{width:1.2,height:1.0});
+  const maxH = Math.max(...allMeta.map(m=>m.height||1.0));
+  const totalCount = allFiles.length;
+  const perWall = Math.ceil(totalCount/3);
+  const avgWidth = Math.max(...allMeta.map(m=>m.width||1.2));
+  const gap = 0.4;
+  const wallLen = perWall*(avgWidth+gap)+1;
+  const h = Math.max(4, maxH+1.5);
 
   scene = new THREE.Scene();
   scene.background = new THREE.Color(0xdddddd);
 
   camera = new THREE.PerspectiveCamera(75, innerWidth/innerHeight, 0.1, 200);
-  camera.position.set(0, 2, 0); // y = 2 — центр картин
-  camera.rotation.order = 'YXZ';
+  camera.position.set(0, 2, 0);
+  camera.rotation.y = yaw;
 
   renderer = new THREE.WebGLRenderer({antialias:true});
   renderer.setSize(innerWidth, innerHeight);
   renderer.outputEncoding = THREE.sRGBEncoding;
   document.body.appendChild(renderer.domElement);
 
-  const amb = new THREE.AmbientLight(0xffffff, 0.9);
-  const dir = new THREE.DirectionalLight(0xffffff, 0.6);
+  const amb = new THREE.AmbientLight(0xffffff, 0.8);
+  const dir = new THREE.DirectionalLight(0xffffff, 0.7);
   dir.position.set(5,10,5);
   scene.add(amb, dir);
 
-  // Настройки комнаты (можно менять размеры)
-  // width (x): от левой до правой стены
-  // depth (z): от фронтальной (room2 at z = -depth/2) до задней (back)
-  // height (y)
-  room.width = 10; // x-span
-  room.depth = 6;  // z-span
-  room.height = 4;
-  // buffer — минимальная дистанция до стен
-  room.wallBuffer = 0.8;
+  addRoom(wallLen,h);
 
-  addRoom(room);
-  await addPaintings(manifest, descriptions, room);
+  await addPaintings(manifest, descriptions, wallLen);
 
   raycaster = new THREE.Raycaster();
 
-  // управление мышью — только горизонтальный yaw
-  renderer.domElement.addEventListener('click', ()=> {
-    if(!isLocked){
-      isLocked = true;
-      document.getElementById("enterHint").style.display="none";
-    }
-  });
-
-  document.addEventListener('mousemove', e=>{
-    if(!isLocked) return;
-    yaw -= e.movementX * 0.0025;
-    camera.rotation.set(0, yaw, 0);
-  });
-
-  // клавиши: WASD + стрелки; пробел — отойти от картины; Esc — центр
-  document.addEventListener('keydown', e=>{
-    const k = e.key.toLowerCase();
-    if(k==='w') move.w=1;
-    if(k==='s') move.s=1;
-    if(k==='a') move.a=1;
-    if(k==='d') move.d=1;
-    if(e.key==="ArrowUp") move.w=1;
-    if(e.key==="ArrowDown") move.s=1;
-    if(e.key==="ArrowLeft") move.a=1;
-    if(e.key==="ArrowRight") move.d=1;
-
-    if(e.key===" ") {
-      // отступить и развернуться к противоположной стене
-      retreatFromPainting();
-    }
-    if(e.key==="Escape"){
-      goCenter();
-    }
-  });
-
-  document.addEventListener('keyup', e=>{
-    const k = e.key.toLowerCase();
-    if(k==='w') move.w=0;
-    if(k==='s') move.s=0;
-    if(k==='a') move.a=0;
-    if(k==='d') move.d=0;
-    if(e.key==="ArrowUp") move.w=0;
-    if(e.key==="ArrowDown") move.s=0;
-    if(e.key==="ArrowLeft") move.a=0;
-    if(e.key==="ArrowRight") move.d=0;
-  });
-
+  // управление
+  window.addEventListener('resize', ()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight);});
+  document.addEventListener('mousemove', e=>{if(!isLocked)return; yaw-=e.movementX*0.002; camera.rotation.set(0,yaw,0);});
+  renderer.domElement.addEventListener('click',()=>{if(!isLocked){isLocked=true;document.getElementById('enterHint').style.display='none';}});
+  document.addEventListener('keydown',onKey);
+  document.addEventListener('keyup',onKeyUp);
   document.addEventListener('click', onClick);
   document.addEventListener('dblclick', onDblClick);
 
-  window.addEventListener('resize', onResize);
+  // UI
+  document.getElementById('toggleLabels').onclick=()=>{labelsVisible=!labelsVisible;updateLabelVisibility();};
+  document.getElementById('rotSpeed').oninput=e=>rotSpeed=parseFloat(e.target.value);
+  document.getElementById('rotDir').oninput=e=>rotDir=e.target.value==='cw'?1:-1;
+  document.getElementById('leftStep').onclick=()=>sideStep(-1);
+  document.getElementById('rightStep').onclick=()=>sideStep(1);
+  document.getElementById('centerBtn').onclick=()=>exitToCenter();
 
-  document.getElementById('toggleLabels').addEventListener('click',()=>{
-    labelsVisible = !labelsVisible;
-    document.getElementById('toggleLabels').innerText = labelsVisible ? 'Скрыть названия' : 'Показать названия';
-    paintingPlanes.forEach(p=>{
-      if(p.userData.label) p.userData.label.style.display = labelsVisible ? 'block' : 'none';
-    });
-  });
-
+  moveLoop();
   animate();
 }
 
-/* ---------- ROOM ---------- */
-function addRoom(r){
-  const w = r.width, h = r.height, d = r.depth;
+function addRoom(size,h){
+  const w=size,d=size;
+  const floorMat=new THREE.MeshStandardMaterial({color:0xD2B48C,side:THREE.DoubleSide});
+  const ceilMat=new THREE.MeshStandardMaterial({color:0xffffff,side:THREE.DoubleSide});
+  const wallMat=new THREE.MeshStandardMaterial({color:0xE6E6E6,side:THREE.DoubleSide});
+  const backMat=new THREE.MeshStandardMaterial({color:0x555555,side:THREE.DoubleSide});
 
-  // материалы
-  const floorMat = new THREE.MeshStandardMaterial({color:0xD2B48C, side:THREE.DoubleSide});
-  const ceilMat  = new THREE.MeshStandardMaterial({color:0xffffff, side:THREE.DoubleSide});
-  const wallMat  = new THREE.MeshStandardMaterial({color:0xE6E6E6, side:THREE.DoubleSide});
-  const backMat  = new THREE.MeshStandardMaterial({color:0x555555, side:THREE.DoubleSide});
+  const floor=new THREE.Mesh(new THREE.PlaneGeometry(w,d),floorMat);
+  floor.rotation.x=-Math.PI/2;scene.add(floor);
 
-  // floor
-  const floor = new THREE.Mesh(new THREE.PlaneGeometry(w,d), floorMat);
-  floor.rotation.x = -Math.PI/2; scene.add(floor);
+  const ceil=new THREE.Mesh(new THREE.PlaneGeometry(w,d),ceilMat);
+  ceil.rotation.x=Math.PI/2;ceil.position.y=h;scene.add(ceil);
 
-  // ceiling
-  const ceil = new THREE.Mesh(new THREE.PlaneGeometry(w,d), ceilMat);
-  ceil.rotation.x = Math.PI/2; ceil.position.y = h; scene.add(ceil);
+  const front=new THREE.Mesh(new THREE.PlaneGeometry(w,h),wallMat);
+  front.position.set(0,h/2,-d/2);scene.add(front);
 
-  // FRONT wall (room2) at z = -d/2 (frontal)
-  const front = new THREE.Mesh(new THREE.PlaneGeometry(w,h), wallMat);
-  front.position.set(0,h/2,-d/2); scene.add(front);
+  const back=new THREE.Mesh(new THREE.PlaneGeometry(w,h),backMat);
+  back.position.set(0,h/2,d/2);back.rotation.y=Math.PI;scene.add(back);
 
-  // BACK wall (dark)
-  const back = new THREE.Mesh(new THREE.PlaneGeometry(w,h), backMat);
-  back.position.set(0,h/2,d/2); back.rotation.y = Math.PI; scene.add(back);
+  const left=new THREE.Mesh(new THREE.PlaneGeometry(d,h),wallMat);
+  left.position.set(-w/2,h/2,0);left.rotation.y=Math.PI/2;scene.add(left);
 
-  // LEFT wall (room1) at x = -w/2
-  const left = new THREE.Mesh(new THREE.PlaneGeometry(d,h), wallMat);
-  left.position.set(-w/2,h/2,0); left.rotation.y = Math.PI/2; scene.add(left);
-
-  // RIGHT wall (room3)
-  const right = new THREE.Mesh(new THREE.PlaneGeometry(d,h), wallMat);
-  right.position.set(w/2,h/2,0); right.rotation.y = -Math.PI/2; scene.add(right);
-
-  // store exact planes for collision/approach math
-  r.frontZ = -d/2;
-  r.backZ = d/2;
-  r.leftX  = -w/2;
-  r.rightX = w/2;
-  r.height = h;
+  const right=new THREE.Mesh(new THREE.PlaneGeometry(d,h),wallMat);
+  right.position.set(w/2,h/2,0);right.rotation.y=-Math.PI/2;scene.add(right);
 }
 
-/* ---------- PAINTINGS ---------- */
-async function addPaintings(manifest, descriptions, r){
-  // gap between pictures
-  const gap = 0.4; // как просили
-  const loader = new THREE.TextureLoader();
-
-  // walls sets: for each wall we will compute the available linear length and place paintings centered
-  const walls = [
-    { key:'room1', wall:'left', axis:'z', coordFixed:{x:r.leftX}, normal: new THREE.Vector3(1,0,0), rotY: Math.PI/2, wallLength: r.depth },
-    { key:'room2', wall:'front', axis:'x', coordFixed:{z:r.frontZ}, normal: new THREE.Vector3(0,0,1), rotY: 0, wallLength: r.width },
-    { key:'room3', wall:'right', axis:'z', coordFixed:{x:r.rightX}, normal: new THREE.Vector3(-1,0,0), rotY: -Math.PI/2, wallLength: r.depth }
+async function addPaintings(manifest,desc,size){
+  const loader=new THREE.TextureLoader();
+  const sets=[
+    {key:'room1',x:-size/2+0.05,rotY:Math.PI/2},
+    {key:'room2',z:-size/2+0.05,rotY:0},
+    {key:'room3',x:size/2-0.05,rotY:-Math.PI/2}
   ];
 
-  for(const wspec of walls){
-    const list = (manifest[wspec.key] || []).slice(); // array of filenames
-    // load metadata widths/heights from descriptions (fall back defaults)
-    const metas = list.map(fn => {
-      const m = descriptions[fn] || {};
-      return { file: fn, width: (m.width || 1.2), height: (m.height || 1.0), meta: m };
-    });
+  for(const s of sets){
+    const list=manifest[s.key]||[];
+    const totalWidth=list.reduce((a,f)=>a+(desc[f]?.width||1.2)+0.4, -0.4);
+    let offset=-totalWidth/2;
 
-    // compute total length needed along axis (sum widths for axis 'x' or 'z')
-    const totalWidths = metas.reduce((s,m)=> s + m.width, 0);
-    const gapsTotal = Math.max(0, metas.length - 1) * gap;
-    const required = totalWidths + gapsTotal;
+    for(const f of list){
+      const m=desc[f]||{};
+      const w=m.width||1.2, h=m.height||1.0;
+      const tex=await new Promise((res,rej)=>loader.load(ASSETS+f,res,undefined,rej));
+      tex.encoding=THREE.sRGBEncoding;
+      tex.anisotropy=16;
+      const mat=new THREE.MeshStandardMaterial({map:tex});
+      const mesh=new THREE.Mesh(new THREE.PlaneGeometry(w,h),mat);
 
-    // available wall length = wallLength (height ignored) minus 2*cornerMargin
-    const maxCornerMargin = 0.5; // не более 0.5 м от угла до ближайшей картины
-    const available = wspec.wallLength;
-    // compute margin to center; if required > available, we need to scale paintings down proportionally
-    let scale = 1;
-    if(required > (available - 2*0.05)){ // keep tiny 5cm safety
-      scale = Math.max(0.3, (available - 2*0.05) / required); // ограничение масштабирования (не слишком мелко)
-    }
-
-    // after scaling, recompute widths
-    metas.forEach(m => { m.renderW = m.width * scale; m.renderH = m.height * scale; });
-    const totalRenderWidths = metas.reduce((s,m)=> s + m.renderW, 0);
-    const totalGaps = Math.max(0, metas.length - 1) * gap;
-    // chosen margin = min(maxCornerMargin, (available - totalRenderWidths - totalGaps)/2)
-    let margin = Math.max(0, (available - totalRenderWidths - totalGaps)/2);
-    if(margin > maxCornerMargin) margin = maxCornerMargin;
-    // if negative, set to small
-    if(margin < 0) margin = 0.01;
-
-    // starting offset along axis (centered)
-    // we will place first center at: -available/2 + margin + renderW/2
-    let cursor = -available/2 + margin;
-
-    for(let i=0;i<metas.length;i++){
-      const m = metas[i];
-      const tex = await new Promise((res,rej)=>loader.load(ASSETS + m.file, res, undefined, rej));
-      tex.encoding = THREE.sRGBEncoding;
-      tex.anisotropy = 16;
-      const mat = new THREE.MeshStandardMaterial({ map: tex });
-      const plane = new THREE.Mesh(new THREE.PlaneGeometry(m.renderW, m.renderH), mat);
-      // compute position
-      const half = m.renderW / 2;
-      const centerAlong = cursor + half;
-      cursor += m.renderW + gap;
-
-      if(wspec.axis === 'x'){
-        plane.position.x = centerAlong;
-        plane.position.z = wspec.coordFixed.z;
-      } else {
-        plane.position.z = centerAlong;
-        plane.position.x = wspec.coordFixed.x;
-      }
-      plane.position.y = 2; // center height as requested
-      plane.rotation.y = wspec.rotY;
-
-      // ensure plane is slightly offset from wall (inwards) by 0.01 to avoid z-fighting
-      const inward = wspec.normal.clone().multiplyScalar(0.01);
-      plane.position.add(inward);
-
-      // userData
-      plane.userData = {
-        file: m.file,
-        meta: m.meta || {},
-        wall: wspec.key,
-        normal: wspec.normal.clone()
-      };
-
-      // label
-      const label = createLabel(m.meta.title || m.file);
-      plane.userData.label = label;
-
-      scene.add(plane);
-      paintingPlanes.push(plane);
+      if(s.x!==undefined) mesh.position.x=s.x;
+      if(s.z!==undefined) mesh.position.z=s.z;
+      if(s.key==='room1'||s.key==='room3') mesh.position.z=offset+w/2;
+      if(s.key==='room2') mesh.position.x=offset+w/2;
+      mesh.position.y=2;
+      mesh.rotation.y=s.rotY;
+      mesh.userData={file:f,meta:m,wall:s.key};
+      const label=createLabel(m.title||f);
+      mesh.userData.label=label;
+      scene.add(mesh);
+      paintingPlanes.push(mesh);
+      offset+=w+0.4;
     }
   }
 }
 
-/* ---------- HELPERS ---------- */
+function createLabel(t){const e=document.createElement('div');e.className='paintingLabel';e.innerText=t;document.body.appendChild(e);return e;}
+function updateLabelVisibility(){paintingPlanes.forEach(p=>{if(p.userData.label)p.userData.label.style.display=labelsVisible?'block':'none';});}
 
-function createLabel(text){
-  const el = document.createElement('div');
-  el.className = 'paintingLabel';
-  el.innerText = text;
-  el.style.display = labelsVisible ? 'block' : 'none';
-  document.body.appendChild(el);
-  return el;
+function onKey(e){
+  const k=e.key.toLowerCase();
+  if(move[k]!==undefined) move[k]=1;
+  if(e.key==="ArrowUp")move.w=1;
+  if(e.key==="ArrowDown")move.s=1;
+  if(e.key==="ArrowLeft")move.a=1;
+  if(e.key==="ArrowRight")move.d=1;
+  if(e.key===" ")returnFromPainting();
+  if(e.key==="Escape")exitToCenter();
+}
+function onKeyUp(e){
+  const k=e.key.toLowerCase();
+  if(move[k]!==undefined) move[k]=0;
+  if(e.key==="ArrowUp")move.w=0;
+  if(e.key==="ArrowDown")move.s=0;
+  if(e.key==="ArrowLeft")move.a=0;
+  if(e.key==="ArrowRight")move.d=0;
 }
 
-/* ---------- RAYCAST / CLICK / APPROACH ---------- */
-
-function onClick(ev){
-  if(!isLocked) return;
-  // click center
-  raycaster.setFromCamera({x:0,y:0}, camera);
-  const hits = raycaster.intersectObjects(paintingPlanes, true);
-  if(hits.length){
-    const obj = hits[0].object;
-    // full 360 spin + orientation perpendicular
-    const targetYaw = getWallYawForPainting(obj);
-    startFullSpinTo(targetYaw, () => { /* callback after spin complete — nothing extra */ });
-    showDescription(obj.userData);
+function moveLoop(){
+  requestAnimationFrame(moveLoop);
+  if(!isLocked)return;
+  const dir=new THREE.Vector3(move.d-move.a,0,move.s-move.w);
+  if(dir.lengthSq()>0){
+    dir.normalize();
+    const speed=0.1;
+    const sin=Math.sin(yaw),cos=Math.cos(yaw);
+    const dx=(dir.x*cos - dir.z*sin)*speed;
+    const dz=(dir.x*sin + dir.z*cos)*speed;
+    const newX=camera.position.x+dx;
+    const newZ=camera.position.z+dz;
+    const lim=7; // границы
+    if(Math.abs(newX)<lim)camera.position.x=newX;
+    if(Math.abs(newZ)<lim)camera.position.z=newZ;
   }
 }
 
-function onDblClick(ev){
-  if(!isLocked) return;
-  raycaster.setFromCamera({x:0,y:0}, camera);
-  const hits = raycaster.intersectObjects(paintingPlanes, true);
-  if(hits.length){
-    const obj = hits[0].object;
-    // approach painting — but constrain final position at >= room.wallBuffer from wall plane & >= 0.8 m from painting plane
-    approachPainting(obj);
-    showDescription(obj.userData);
-  }
+function onClick(){
+  if(!isLocked)return;
+  raycaster.setFromCamera({x:0,y:0},camera);
+  const hit=raycaster.intersectObjects(paintingPlanes,true)[0];
+  if(hit){startRotateToPainting(hit.object);}
+}
+function onDblClick(){
+  if(!isLocked)return;
+  raycaster.setFromCamera({x:0,y:0},camera);
+  const hit=raycaster.intersectObjects(paintingPlanes,true)[0];
+  if(hit){approachPainting(hit.object);}
 }
 
-function getWallYawForPainting(obj){
-  // return yaw so camera faces the painting perpendicularly (normal pointing to camera)
-  const normal = obj.userData.normal.clone();
-  // camera should look along -normal
-  const lookDir = normal.clone().negate();
-  // yaw = atan2(x,z) because we use yaw as rotation around y where forward is +z
-  return Math.atan2(lookDir.x, lookDir.z);
-}
-
-function startFullSpinTo(targetYaw, cb){
-  // animate yaw so camera does at least one full spin (2π) and ends at targetYaw perpendicular to wall
-  // We'll compute shortest direction to reach targetYaw, then add +2π to ensure full spin (we'll pick direction that looks nicer)
-  // normalize current yaw to [-π,π)
-  const cur = normalizeAngle(yaw);
-  const tgt = normalizeAngle(targetYaw);
-
-  // compute minimal delta
-  let delta = angleDifference(tgt, cur); // in (-π, π]
-  // choose spin direction so that rotation includes +2π in the sign of delta
-  const spinDir = delta >= 0 ? 1 : -1;
-  // target final yaw value = current + delta + spinDir*2π
-  const finalYaw = cur + delta + spinDir * 2 * Math.PI;
-
-  // start animator
-  const duration = 1200; // ms for spin (tune)
-  const startTime = performance.now();
-  const startYaw = cur;
-  function step(t){
-    const now = t;
-    const t01 = Math.min(1, (now - startTime) / duration);
-    // easeInOutQuad
-    const eased = t01 < 0.5 ? 2*t01*t01 : -1 + (4 - 2*t01)*t01;
-    yaw = startYaw + (finalYaw - startYaw) * eased;
-    camera.rotation.set(0, yaw, 0);
-    if(t01 < 1){
-      requestAnimationFrame(step);
-    } else {
-      // normalize yaw to [-π,π]
-      yaw = normalizeAngle(yaw);
-      camera.rotation.set(0, yaw, 0);
-      if(cb) cb();
-    }
-  }
-  requestAnimationFrame(step);
+function startRotateToPainting(obj){
+  const pos=new THREE.Vector3();obj.getWorldPosition(pos);
+  const dir=pos.clone().sub(camera.position).normalize();
+  const targetYaw=Math.atan2(dir.x,dir.z);
+  showDescription(obj.userData);
+  let t=0;
+  rotateAnim={targetYaw,orig:yaw};
 }
 
 function approachPainting(obj){
-  // compute painting world position and wall normal
-  const pos = new THREE.Vector3(); obj.getWorldPosition(pos);
-  const normal = obj.userData.normal.clone();
-  // desired camera position = painting position + (-normal) * minDistanceFromPainting
-  const minDist = 0.8; // минимальная дистанция до картины
-  const desired = pos.clone().add(normal.clone().multiplyScalar(-minDist));
-  // but clamp desired to not cross wall: the painting is at ~wall plane ± small offset.
-  // determine wall plane coordinate (x or z) and clamp accordingly with room.wallBuffer
-  if(Math.abs(obj.userData.normal.x) > 0.5){
-    // wall is perpendicular to X => fix X clamp
-    if(normal.x > 0){
-      // wall faces +x (i.e., painting on left wall looking +x) => painting x ~ leftX + tiny
-      desired.x = Math.max(desired.x, room.leftX + room.wallBuffer);
-      desired.x = Math.min(desired.x, room.rightX - room.wallBuffer);
-    } else {
-      desired.x = Math.min(desired.x, room.rightX - room.wallBuffer);
-      desired.x = Math.max(desired.x, room.leftX + room.wallBuffer);
-    }
-  } else {
-    // wall perpendicular to Z
-    if(normal.z > 0){
-      desired.z = Math.max(desired.z, room.frontZ + room.wallBuffer);
-      desired.z = Math.min(desired.z, room.backZ - room.wallBuffer);
-    } else {
-      desired.z = Math.min(desired.z, room.backZ - room.wallBuffer);
-      desired.z = Math.max(desired.z, room.frontZ + room.wallBuffer);
-    }
-  }
-  desired.y = 2; // keep camera height
-  // rotate camera to face painting (perpendicular) smoothly during approach: compute target yaw
-  const targetYaw = getWallYawForPainting(obj);
-  // set approachState for animation in animate loop
-  approachState = {
-    type: 'to',
-    fromPos: camera.position.clone(),
-    toPos: desired.clone(),
-    startTime: performance.now(),
-    duration: 900,
-    startYaw: yaw,
-    targetYaw: targetYaw
-  };
+  const pos=new THREE.Vector3();obj.getWorldPosition(pos);
+  const q=new THREE.Quaternion();obj.getWorldQuaternion(q);
+  const forward=new THREE.Vector3(0,0,1).applyQuaternion(q);
+  const to=pos.clone().add(forward.clone().multiplyScalar(-0.8));
+  to.y=2;
+  currentTarget={pos:pos,to:to};
 }
 
-/* retreat from painting: do small step back along viewing direction but keep inside room bounds */
-function retreatFromPainting(){
-  // retreat 2m back along current forward vector
-  const forward = new THREE.Vector3(Math.sin(yaw), 0, Math.cos(yaw));
-  const retreat = camera.position.clone().add(forward.clone().multiplyScalar(-2.0));
-  // clamp to room bounds with buffer
-  retreat.x = Math.max(room.leftX + room.wallBuffer, Math.min(room.rightX - room.wallBuffer, retreat.x));
-  retreat.z = Math.max(room.frontZ + room.wallBuffer, Math.min(room.backZ - room.wallBuffer, retreat.z));
-  retreat.y = 2;
-  approachState = {
-    type: 'retreat',
-    fromPos: camera.position.clone(),
-    toPos: retreat.clone(),
-    startTime: performance.now(),
-    duration: 700,
-    startYaw: yaw,
-    targetYaw: normalizeAngle(yaw + Math.PI) // turn around to opposite wall
-  };
+function returnFromPainting(){currentTarget=null;}
+function exitToCenter(){currentTarget=null;camera.position.set(0,2,0);yaw=Math.PI/2;camera.rotation.y=yaw;}
+
+function sideStep(dir){
+  const step=0.5;
+  const sin=Math.sin(yaw),cos=Math.cos(yaw);
+  camera.position.x+=dir*cos*step;
+  camera.position.z-=dir*sin*step;
 }
 
-/* go center and look at room1 (left wall) */
-function goCenter(){
-  const center = new THREE.Vector3(0, 2, 0);
-  const targetYaw = Math.PI/2; // look to left (room1)
-  approachState = {
-    type: 'center',
-    fromPos: camera.position.clone(),
-    toPos: center.clone(),
-    startTime: performance.now(),
-    duration: 900,
-    startYaw: yaw,
-    targetYaw: targetYaw
-  };
+function showDescription(d){
+  const box=document.getElementById('descriptionBox');
+  document.getElementById('descTitle').innerText=d.meta.title||d.file;
+  document.getElementById('descText').innerText=(d.meta.description||'Описание отсутствует')+(d.meta.author?`\nАвтор: ${d.meta.author}`:'');
+  box.style.display='block';
 }
-
-/* ---------- MOVEMENT & ANIMATE ---------- */
 
 function animate(){
   requestAnimationFrame(animate);
-
-  // movement only if not in approachState (approach animations override manual movement)
-  if(!approachState){
-    // movement vector in local camera space
-    if(isLocked){
-      const dir = new THREE.Vector3(move.d - move.a, 0, move.s - move.w);
-      if(dir.lengthSq() > 0){
-        dir.normalize();
-        const speed = 0.08; // walking speed
-        const sin = Math.sin(yaw), cos = Math.cos(yaw);
-        const dx = (dir.x * cos - dir.z * sin) * speed;
-        const dz = (dir.x * sin + dir.z * cos) * speed;
-        let nx = camera.position.x + dx;
-        let nz = camera.position.z + dz;
-        // clamp to room bounds with buffer
-        nx = Math.max(room.leftX + room.wallBuffer, Math.min(room.rightX - room.wallBuffer, nx));
-        nz = Math.max(room.frontZ + room.wallBuffer, Math.min(room.backZ - room.wallBuffer, nz));
-        camera.position.x = nx;
-        camera.position.z = nz;
-      }
-    }
-  } else {
-    // process approachState animation
-    const now = performance.now();
-    const t01 = Math.min(1, (now - approachState.startTime) / approachState.duration);
-    // easeInOutQuad
-    const eased = t01 < 0.5 ? 2*t01*t01 : -1 + (4 - 2*t01)*t01;
-    camera.position.lerpVectors(approachState.fromPos, approachState.toPos, eased);
-    const yawDelta = angleDifference(approachState.targetYaw, approachState.startYaw);
-    yaw = approachState.startYaw + yawDelta * eased;
-    camera.rotation.set(0, yaw, 0);
-    if(t01 >= 1){
-      // finish
-      approachState = null;
-    }
+  if(rotateAnim){
+    yaw += rotDir*0.02*rotSpeed;
+    if(Math.abs(yaw-rotateAnim.targetYaw)<0.05){yaw=rotateAnim.targetYaw;rotateAnim=null;}
+    camera.rotation.y=yaw;
   }
-
+  if(currentTarget){
+    const dir=new THREE.Vector3().subVectors(currentTarget.to,camera.position);
+    if(dir.length()>0.05)camera.position.addScaledVector(dir.normalize(),0.05);
+  }
   updateLabels();
-  renderer.render(scene, camera);
+  renderer.render(scene,camera);
 }
-
-/* ---------- LABELS & UI ---------- */
 
 function updateLabels(){
   paintingPlanes.forEach(p=>{
-    if(!p.userData.label || !labelsVisible) return;
-    const pos = new THREE.Vector3(); p.getWorldPosition(pos);
+    if(!p.userData.label||!labelsVisible)return;
+    const pos=new THREE.Vector3();p.getWorldPosition(pos);
     pos.project(camera);
-    const x = (pos.x * 0.5 + 0.5) * innerWidth;
-    const y = (-pos.y * 0.5 + 0.5) * innerHeight;
-    p.userData.label.style.left = x + 'px';
-    p.userData.label.style.top = y + 'px';
+    const x=(pos.x*0.5+0.5)*innerWidth;
+    const y=(-pos.y*0.5+0.5)*innerHeight;
+    p.userData.label.style.left=x+'px';
+    p.userData.label.style.top=y+'px';
   });
 }
 
-/* ---------- UTILS ---------- */
-
-function onResize(){
-  camera.aspect = innerWidth / innerHeight;
-  camera.updateProjectionMatrix();
-  renderer.setSize(innerWidth, innerHeight);
-}
-
-async function fetchJSON(url){
-  const r = await fetch(url);
-  if(!r.ok) throw new Error('Ошибка загрузки '+url);
-  return r.json();
-}
-
-function normalizeAngle(a){
-  // returns angle normalized to [-PI, PI)
-  return Math.atan2(Math.sin(a), Math.cos(a));
-}
-function angleDifference(target, source){
-  // returns shortest signed difference target - source in (-PI,PI]
-  let diff = normalizeAngle(target) - normalizeAngle(source);
-  diff = Math.atan2(Math.sin(diff), Math.cos(diff));
-  return diff;
-}
-
-function showDescription(data){
-  const box = document.getElementById('descriptionBox');
-  const title = data.meta && (data.meta.title || '') || data.file;
-  const desc = (data.meta && (data.meta.description || 'Описание отсутствует')) || 'Описание отсутствует';
-  const author = data.meta && data.meta.author ? `\nАвтор: ${data.meta.author}` : '';
-  document.getElementById('descTitle').innerText = title;
-  document.getElementById('descText').innerText = desc + author;
-  box.style.display = 'block';
-  // hide after 10s
-  clearTimeout(showDescription._hideTimeout);
-  showDescription._hideTimeout = setTimeout(()=>box.style.display='none', 10000);
-}
+async function fetchJSON(url){const r=await fetch(url);if(!r.ok)throw new Error('Ошибка загрузки '+url);return r.json();}
 </script>
 </body>
 </html>
