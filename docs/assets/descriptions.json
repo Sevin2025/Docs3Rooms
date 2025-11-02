@@ -8,7 +8,7 @@
   "paintingA07.jpg": {"title":"Thinking Reed. Choice / (Blaise Pascal).","description":"Oil on canvas. 70x70","width": 0.70,"height": 0.70,"author":"S. Vinyarskiy"},
   "paintingA08.jpg": {"title":"Rhythm of life","description":"Oil on canvas 60x60","width": 0.60,"height": 0.60,"author":"S. Vinyarskiy"},
   "paintingA09.jpg": {"title":"Loneliness","description":"Oil on canvas 30x40","width": 0.30,"height": 0.40,"author":"S. Vinyarskiy"},
-  "paintingA10.jpg": {"title":"Moonlight","description":"Oil on canvas","width": 0.70,"height": 0.70,"author":"S. Vinyarskiy"},
+  "paintingA10.jpg": {"title":"Moonlight","description":"Oil on canvas","width": 0.30,"height": 0.40,"author":"S. Vinyarskiy"},
   "paintingA11.jpg": {"title":"Transfiguration","description":"Oil on canvas 75x75","width": 0.75,"height": 0.75,"author":"S. Vinyarskiy"},
   "paintingA12.jpg": {"title":"Cis-Moll. Moonlight Sonata","description":"Oil on canvas 60x50","width": 0.60,"height": 0.50,"author":"S. Vinyarskiy"},
   "paintingA13.jpg": {"title":"Invasion","description":"Mixed Media on canvas, leather, wood, gold. Oil on canvas 20x60","width": 0.20,"height": 0.60,"author":"S. Vinyarskiy"},
@@ -18,7 +18,7 @@
   "paintingA17.jpg": {"title":"Cis moll. Music in color","description":"Oil on canvas 40x50","width": 0.40,"height": 0.50,"author":"S. Vinyarskiy"},
   "paintingA18.jpg": {"title":"Spherical composition","description":"Oil on canvas 60x70","width": 0.60,"height": 0.70,"author":"S. Vinyarskiy"},
   "paintingG01.jpg": {"title":"Angel with bowls. The Seventh Cup.","description":"Canvas, oil, gold 40x30","width": 0.40,"height": 0.30,"author":"S. Vinyarskiy"},
-  "paintingG02.jpg": {"title":"Angel with a letter","description":"Canvas, oil, gold 40x30","width": 0.40,"height": 0.30,"author":"S. Vinyarskiy"},
+  "paintingG02.jpg": {"title":"Angel with a letter","description":"Canvas, oil, gold 30x40","width": 0.30,"height": 0.40,"author":"S. Vinyarskiy"},
   "paintingG03.jpg": {"title":"Die Bucht im Morgengrauen","description":"Oil on canvas 50x45","width": 0.50,"height": 0.45,"author":"S. Vinyarskiy"},
   "paintingG04.jpg": {"title":"The Road to Quinitas 1","description":"Oil on canvas 50x65. Painting on religious themes based on 14th-century Polish iconography. Depicts God the Father, Christ the Child, and the Crucifixion on the Tree of Life.","width": 0.50,"height": 0.65,"author":"S. Vinyarskiy"},
   "paintingG05.jpg": {"title":"The Road to Quinitas","description":"Oil on canvas 50x65. Painting on religious themes based on 14th-century Polish iconography. Depicts God the Father, Christ the Child, and the Crucifixion on the Tree of Life.","width": 0.50,"height": 0.65,"author":"S. Vinyarskiy"},
@@ -38,6 +38,6 @@
   "paintingS08.jpg": {"title":"Wanderer","description":"Oil on canvas 100x60","width": 1.00,"height": 0.60,"author":"S. Vinyarskiy"},
   "paintingS09.jpg": {"title":"The angel","description":"Oil on canvas 70x60","width": 0.70,"height": 0.60,"author":"S. Vinyarskiy"},
   "paintingS10.jpg": {"title":"Flower of Life","description":"Oil on canvas 80x120","width": 0.80,"height": 1.20,"author":"S. Vinyarskiy"},
-  "paintingS11.jpg": {"title":"Healing","description":"Oil on canvas 80x60","width": 0.80,"height": 0.60,"author":"S. Vinyarskiy"},
+  "paintingS11.jpg": {"title":"Healing","description":"Oil on canvas 60x80","width": 0.60,"height": 0.80,"author":"S. Vinyarskiy"},
   "paintingS12.jpg": {"title":"Farewell to the spruce","description":"Oil on canvas 60x80","width": 0.60,"height": 0.80,"author":"S. Vinyarskiy"}
  }
