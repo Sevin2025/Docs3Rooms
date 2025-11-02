@@ -3,12 +3,11 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>3D Галерея — Одна комната</title>
+<title>3D Галерея</title>
 <style>
-html,body{height:100%;margin:0;overflow:hidden;font-family:Arial,sans-serif;background:#eee}
+html,body{margin:0;height:100%;overflow:hidden;background:#eee;font-family:Arial,sans-serif}
 canvas{display:block}
 
-/* Кнопки интерфейса */
 #ui{
   position:fixed;right:12px;top:12px;z-index:20;
   background:rgba(255,255,255,0.95);
@@ -63,7 +62,8 @@ let paintingsGroup = new THREE.Group();
 let paintingPlanes = [];
 let labelsVisible = true;
 let currentTarget = null;
-let yaw = 0; // угол горизонтального поворота
+let returnTarget = null;
+let yaw = 0;
 
 init();
 
@@ -95,9 +95,13 @@ async function init(){
 
   raycaster = new THREE.Raycaster();
 
-  // управление камерой
   let isLocked = false;
-  renderer.domElement.addEventListener('click', ()=>{isLocked=true;document.getElementById("enterHint").style.display="none";});
+  renderer.domElement.addEventListener('click', ()=>{
+    isLocked = true;
+    document.getElementById("enterHint").style.display="none";
+  });
+
+  // Горизонтальный поворот
   document.addEventListener('mousemove', e=>{
     if(!isLocked) return;
     yaw -= e.movementX * 0.002;
@@ -106,20 +110,23 @@ async function init(){
 
   // WASD
   const move = {w:0,s:0,a:0,d:0};
-  document.addEventListener('keydown',e=>{if(move[e.key.toLowerCase()]!==undefined) move[e.key.toLowerCase()]=1;});
-  document.addEventListener('keyup',e=>{if(move[e.key.toLowerCase()]!==undefined) move[e.key.toLowerCase()]=0;});
+  document.addEventListener('keydown',e=>{
+    if(move[e.key.toLowerCase()]!==undefined) move[e.key.toLowerCase()]=1;
+  });
+  document.addEventListener('keyup',e=>{
+    if(move[e.key.toLowerCase()]!==undefined) move[e.key.toLowerCase()]=0;
+  });
 
-  // обработка движения
   function moveLoop(){
     requestAnimationFrame(moveLoop);
     if(!isLocked) return;
     const dir = new THREE.Vector3(move.d-move.a,0,move.s-move.w);
     if(dir.lengthSq()>0){
       dir.normalize();
-      const moveSpeed = 2.5*0.016;
+      const speed = 2.5*0.016;
       const sin = Math.sin(yaw), cos = Math.cos(yaw);
-      camera.position.x += (dir.x*cos - dir.z*sin)*moveSpeed;
-      camera.position.z += (dir.x*sin + dir.z*cos)*moveSpeed;
+      camera.position.x += (dir.x*cos - dir.z*sin)*speed;
+      camera.position.z += (dir.x*sin + dir.z*cos)*speed;
     }
   }
   moveLoop();
@@ -139,7 +146,7 @@ async function init(){
 }
 
 function addRoom(){
-  const w=20, h=5, d=20;
+  const w=20,h=5,d=20;
   const floorMat = new THREE.MeshStandardMaterial({color:0xD2B48C, side:THREE.DoubleSide});
   const ceilMat  = new THREE.MeshStandardMaterial({color:0xffffff, side:THREE.DoubleSide});
   const wallMat  = new THREE.MeshStandardMaterial({color:0xE6E6E6, side:THREE.DoubleSide});
@@ -224,7 +231,7 @@ function createLabel(text){
 function onClick(){
   raycaster.setFromCamera({x:0,y:0},camera);
   const hits = raycaster.intersectObjects(paintingPlanes,true);
-  if(hits.length>0){
+  if(hits.length>0 && !returnTarget){
     const obj=hits[0].object;
     const pos=new THREE.Vector3(); obj.getWorldPosition(pos);
     const quat=new THREE.Quaternion(); obj.getWorldQuaternion(quat);
@@ -247,23 +254,33 @@ function showDescription(data){
 function animate(){
   requestAnimationFrame(animate);
 
-  // приближение к выбранной картине
-  if(currentTarget){
-    const dir=new THREE.Vector3().subVectors(currentTarget.to,camera.position);
-    if(dir.length()>0.05) camera.position.addScaledVector(dir.normalize(),0.05);
+  // === Приближение к выбранной картине ===
+  if (currentTarget) {
+    const dir = new THREE.Vector3().subVectors(currentTarget.to, camera.position);
+    if (dir.length() > 0.05) camera.position.addScaledVector(dir.normalize(), 0.05);
 
-    // автоотход если повернулся
-    const forward=new THREE.Vector3(0,0,-1).applyQuaternion(camera.quaternion);
-    const toTarget=currentTarget.pos.clone().sub(camera.position).normalize();
-    const angle=THREE.MathUtils.radToDeg(forward.angleTo(toTarget));
-    if(angle>30){
-      camera.position.add(forward.multiplyScalar(-0.1)); // отход
-      currentTarget=null;
+    const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
+    const toTarget = currentTarget.pos.clone().sub(camera.position).normalize();
+    const angle = THREE.MathUtils.radToDeg(forward.angleTo(toTarget));
+
+    if (angle > 30) {
+      returnTarget = new THREE.Vector3(0, 1.6, 0);
+      currentTarget = null;
+    }
+  }
+
+  // === Постепенное возвращение в центр комнаты ===
+  if (returnTarget) {
+    const dir = new THREE.Vector3().subVectors(returnTarget, camera.position);
+    if (dir.length() > 0.05) {
+      camera.position.addScaledVector(dir.normalize(), 0.05);
+    } else {
+      returnTarget = null;
     }
   }
 
   updateLabels();
-  renderer.render(scene,camera);
+  renderer.render(scene, camera);
 }
 
 function updateLabels(){
