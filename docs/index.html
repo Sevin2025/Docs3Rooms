@@ -40,6 +40,7 @@ let labelsVisible = true;
 let isLocked = false;
 let yaw = 0;
 let targetYaw = 0;
+let move = {w:0,s:0,a:0,d:0,q:0,e:0};
 let currentTarget = null;
 let moveToTarget = false;
 
@@ -79,13 +80,7 @@ async function init(){
     }
   });
 
-  // Клик — просто поворот
-  document.addEventListener('click', e=>onClick(e,false));
-  // Двойной клик — приближение
-  document.addEventListener('dblclick', e=>onClick(e,true));
-
   // Управление движением
-  const move = {w:0,s:0,a:0,d:0,q:0,e:0};
   document.addEventListener('keydown',e=>{
     const k=e.key.toLowerCase();
     if(k in move) move[k]=1;
@@ -95,33 +90,9 @@ async function init(){
     if(k in move) move[k]=0;
   });
 
-  function moveLoop(){
-    requestAnimationFrame(moveLoop);
-    if(!isLocked) return;
-    const speed = 2.5 * 0.016;
-    const dir = new THREE.Vector3();
-
-    // Вперёд / назад
-    if(move.w) dir.z -= speed;
-    if(move.s) dir.z += speed;
-    // Влево / вправо вдоль стены
-    if(move.a) dir.x -= speed;
-    if(move.d) dir.x += speed;
-
-    const sin = Math.sin(yaw);
-    const cos = Math.cos(yaw);
-    camera.position.x += dir.x * cos - dir.z * sin;
-    camera.position.z += dir.x * sin + dir.z * cos;
-
-    // Ограничения по комнате (12×12)
-    camera.position.x = Math.max(-5.5, Math.min(5.5, camera.position.x));
-    camera.position.z = Math.max(-5.5, Math.min(5.5, camera.position.z));
-
-    // Развороты Q/E строго на 90°
-    if(move.q){ targetYaw = Math.round((yaw + Math.PI/2)/(Math.PI/2))*(Math.PI/2); move.q=0; }
-    if(move.e){ targetYaw = Math.round((yaw - Math.PI/2)/(Math.PI/2))*(Math.PI/2); move.e=0; }
-  }
-  moveLoop();
+  // Клик — поворот, двойной клик — приближение
+  document.addEventListener('click', e=>onClick(e,false));
+  document.addEventListener('dblclick', e=>onClick(e,true));
 
   document.getElementById('toggleLabels').addEventListener('click',()=>{
     labelsVisible = !labelsVisible;
@@ -234,6 +205,28 @@ function showDescription(data){
 
 function animate(){
   requestAnimationFrame(animate);
+
+  if(isLocked){
+    const speed = 0.05;
+    const dir = new THREE.Vector3();
+
+    if(move.w) dir.z -= speed;
+    if(move.s) dir.z += speed;
+    if(move.a) dir.x -= speed;
+    if(move.d) dir.x += speed;
+
+    const sin = Math.sin(yaw);
+    const cos = Math.cos(yaw);
+    camera.position.x += dir.x * cos - dir.z * sin;
+    camera.position.z += dir.x * sin + dir.z * cos;
+
+    camera.position.x = Math.max(-5.5, Math.min(5.5, camera.position.x));
+    camera.position.z = Math.max(-5.5, Math.min(5.5, camera.position.z));
+
+    // Повороты Q/E строго на 90°
+    if(move.q){ targetYaw += Math.PI/2; move.q=0; }
+    if(move.e){ targetYaw -= Math.PI/2; move.e=0; }
+  }
 
   yaw += (targetYaw - yaw) * 0.1;
   camera.rotation.set(0, yaw, 0);
