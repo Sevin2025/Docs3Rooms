@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>3D Галерея — 1 комната</title>
+<title>3D Галерея</title>
 <style>
 html,body{margin:0;height:100%;overflow:hidden;background:#eee;font-family:Arial,sans-serif}
 canvas{display:block}
@@ -20,12 +20,12 @@ button:hover{background:#666}
   <button id="toggleLabels">Скрыть названия</button>
 </div>
 
-<div id="descriptionBox" aria-live="polite">
+<div id="descriptionBox">
   <div id="descTitle" style="font-weight:700;margin-bottom:6px"></div>
   <div id="descText" style="white-space:pre-wrap"></div>
 </div>
 
-<div id="enterHint">Кликните по сцене для управления (WASD + мышь). Один клик по картине — поворот взгляда, двойной клик — приближение.</div>
+<div id="enterHint">Кликните по сцене для входа (WASD / стрелки + мышь)</div>
 
 <script type="module">
 import * as THREE from './assets/three/three.module.js';
@@ -37,29 +37,26 @@ const DESCRIPTIONS = ASSETS + 'descriptions.json';
 let scene, camera, renderer, raycaster;
 let paintingPlanes = [];
 let labelsVisible = true;
-let lookTarget = null;        // цель только для поворота взгляда
-let moveTarget = null;        // цель для перемещения (позиция)
-let lookQuatTarget = null;    // целевая кватернион для взгляда (чтобы slerp)
-let isPointerLocked = false;
-let yaw = 0;                  // горизонтальный поворот камеры
-const ROOM = { w:30, h:6, d:30 }; // размеры комнаты (ширина, высота, глубина)
-const WALL_MARGIN = 1.5;      // отступ от углов для картин
-const EYE_HEIGHT = 1.6;       // высота глаз
+let currentTarget = null;
+let returnTarget = null;
+let yaw = 0;
+let moveToTarget = false;
+let isLocked = false;
+let move = {w:0,s:0,a:0,d:0};
 
 init();
 
-async function init() {
-  const [manifest, descriptions] = await Promise.all([ fetchSafe(MANIFEST), fetchSafe(DESCRIPTIONS) ]);
+async function init(){
+  const [manifest, descriptions] = await Promise.all([
+    fetchJSON(MANIFEST),
+    fetchJSON(DESCRIPTIONS).catch(()=> ({}))
+  ]);
+
   scene = new THREE.Scene();
   scene.background = new THREE.Color(0xdddddd);
 
   camera = new THREE.PerspectiveCamera(75, innerWidth/innerHeight, 0.1, 200);
-  // Начальная позиция: в сторону стены room1 (левая стена => x отрицательное),
-  // на высоте 1.6 м, по центру по z.
-  camera.position.set(- (ROOM.w/2 - 1.0), EYE_HEIGHT, 0); // близко к левой стене
-  // камера смотрит строго горизонтально; yaw направлен на стену room1 (в +X)
-  yaw = Math.PI / 2; // +90deg — смотрим по +X (влево стене)
-  applyCameraEuler();
+  camera.position.set(0, 1.6, 0);
 
   renderer = new THREE.WebGLRenderer({antialias:true});
   renderer.setSize(innerWidth, innerHeight);
@@ -67,387 +64,281 @@ async function init() {
   document.body.appendChild(renderer.domElement);
 
   const amb = new THREE.AmbientLight(0xffffff, 0.8);
-  const dir = new THREE.DirectionalLight(0xffffff, 0.6);
+  const dir = new THREE.DirectionalLight(0xffffff, 0.8);
   dir.position.set(5,10,5);
   scene.add(amb, dir);
 
   addRoom();
-
-  await addPaintingsFromManifest(manifest, descriptions);
+  await addPaintings(manifest, descriptions);
 
   raycaster = new THREE.Raycaster();
 
-  // pointer controls: простой режим — клик включает "вход" (для перемещения мышью)
-  renderer.domElement.addEventListener('click', (e)=>{
-    // первый клик убирает подсказку
-    document.getElementById("enterHint").style.display="none";
+  renderer.domElement.addEventListener('click', ()=> {
+    if(!isLocked){
+      isLocked = true;
+      document.getElementById("enterHint").style.display="none";
+    }
   });
 
-  // Обработка мыши: только горизонтальная ориентация (никакого наклона)
-  let isMouseDown = false;
-  let lastX = 0;
-  renderer.domElement.addEventListener('mousedown', (e)=>{ isMouseDown = true; lastX = e.clientX; });
-  window.addEventListener('mouseup', ()=> isMouseDown = false);
-  window.addEventListener('mousemove', (e)=>{
-    if(!isMouseDown) return;
-    const dx = e.clientX - lastX; lastX = e.clientX;
-    yaw -= dx * 0.0025;
-    clampYawToAvoidBackWall();
-    applyCameraEuler();
+  document.addEventListener('mousemove', e=>{
+    if(!isLocked) return;
+    yaw -= e.movementX * 0.002;
+    camera.rotation.set(0, yaw, 0);
   });
 
-  // WASD перемещение по горизонтальной плоскости (выровнено по yaw)
-  const moveState = {w:0,s:0,a:0,d:0};
-  window.addEventListener('keydown', (e)=>{ const k=e.key.toLowerCase(); if(k in moveState) moveState[k]=1; });
-  window.addEventListener('keyup', (e)=>{ const k=e.key.toLowerCase(); if(k in moveState) moveState[k]=0; });
+  document.addEventListener('keydown',e=>{
+    const key = e.key.toLowerCase();
+    if(move[key]!==undefined) move[key]=1;
 
-  // мышиный click / dblclick: различаем по таймеру, чтобы один не мешал другому
-  let clickTimer = null;
-  renderer.domElement.addEventListener('click', (e)=>{
-    // обычный click: если попали по картине — поворот к ней (без приближения)
-    if (clickTimer) return; // dblclick coming
-    clickTimer = setTimeout(()=>{
-      clickTimer = null;
-      handleCanvasClick(e, false);
-    }, 250);
-  });
-  renderer.domElement.addEventListener('dblclick', (e)=>{
-    if(clickTimer){ clearTimeout(clickTimer); clickTimer = null; }
-    handleCanvasClick(e, true);
+    // стрелки
+    if(e.key==="ArrowUp") move.w=1;
+    if(e.key==="ArrowDown") move.s=1;
+    if(e.key==="ArrowLeft") move.a=1;
+    if(e.key==="ArrowRight") move.d=1;
+
+    // пробел — отход от картины
+    if(e.key===" "){ returnFromPainting(); }
+
+    // Esc — выход из режима приближения / возвращение в центр
+    if(e.key==="Escape"){ exitToCenter(); }
   });
 
+  document.addEventListener('keyup',e=>{
+    const key = e.key.toLowerCase();
+    if(move[key]!==undefined) move[key]=0;
+    if(e.key==="ArrowUp") move.w=0;
+    if(e.key==="ArrowDown") move.s=0;
+    if(e.key==="ArrowLeft") move.a=0;
+    if(e.key==="ArrowRight") move.d=0;
+  });
+
+  document.addEventListener('click', onClick);
+  document.addEventListener('dblclick', onDblClick);
   window.addEventListener('resize', onResize);
 
-  // анимация и обновления
-  let prev = performance.now();
-  function loop(now){
-    const dt = Math.min((now-prev)/1000, 0.05); prev = now;
-    // движение WASD
-    const forward = new THREE.Vector3(Math.sin(yaw),0,-Math.cos(yaw));
-    const right = new THREE.Vector3(Math.cos(yaw),0,Math.sin(yaw));
-    let moveVec = new THREE.Vector3();
-    if(moveState.w) moveVec.add(forward);
-    if(moveState.s) moveVec.add(forward.clone().negate());
-    if(moveState.a) moveVec.add(right.clone().negate());
-    if(moveState.d) moveVec.add(right);
-    if(moveVec.lengthSq()>0){
-      moveVec.normalize();
-      const speed = 2.5; // m/s
-      camera.position.addScaledVector(moveVec, speed*dt);
-      constrainCameraToRoom();
-    }
+  document.getElementById('toggleLabels').addEventListener('click',()=>{
+    labelsVisible = !labelsVisible;
+    document.getElementById('toggleLabels').innerText = labelsVisible ? 'Скрыть названия' : 'Показать названия';
+    paintingPlanes.forEach(p=>{
+      if(p.userData.label) p.userData.label.style.display = labelsVisible ? 'block' : 'none';
+    });
+  });
 
-    // плавный поворот взгляда (slerp к lookQuatTarget), только горизонтальная компонента
-    if(lookQuatTarget){
-      // slerp
-      camera.quaternion.slerp(lookQuatTarget, Math.min(1, dt * 6.0)); // плавность
-      // Навязать нулевой наклон (чтобы всегда горизонтально)
-      // вычислим yaw из кватерниона и применим его с нулевым pitch
-      const e = new THREE.Euler().setFromQuaternion(camera.quaternion, 'YXZ');
-      yaw = e.y;
-      applyCameraEuler(true); // применить кватерион через yaw, сохраняя горизонталь
-    }
-
-    // плавное приближение к moveTarget (если задан)
-    if(moveTarget){
-      const dir = new THREE.Vector3().subVectors(moveTarget, camera.position);
-      const dist = dir.length();
-      if(dist > 0.02){
-        const step = Math.min(dist, dt * 3.0); // скорость приближения 3 m/s (макс)
-        camera.position.addScaledVector(dir.normalize(), step);
-        constrainCameraToRoom();
-      } else {
-        // достигли
-        camera.position.copy(moveTarget);
-        moveTarget = null;
-      }
-    }
-
-    // если есть lookTarget, обеспечить, чтобы камера смотрела прямо перпендикулярно стене при полном приближении
-    if(lookTarget && !moveTarget){
-      // при полном приближении — уже handled в dblclick логике; здесь можно дополнительно ничего не делать
-    }
-
-    updateLabels();
-    renderer.render(scene, camera);
-    requestAnimationFrame(loop);
-  }
-  requestAnimationFrame(loop);
-
-  // Приватные вспом. функции ниже
-  function applyCameraEuler(fromQuaternion=false){
-    // Устанавливает yaw (и нулевой pitch/roll) в камеру.
-    // Если fromQuaternion=true, мы уже синхронизировали yaw из кватерниона и хотим задать кватернион с нулевым pitch.
-    const e = new THREE.Euler(0, yaw, 0, 'YXZ');
-    camera.rotation.copy(e);
-    // Поддерживать горизонтальную ориентацию — обнуляем наклон.
-    camera.rotation.x = 0;
-    camera.rotation.z = 0;
-    // Обновляем кватернион, чтобы slerp имел корректную стартовую точку
-    if(!fromQuaternion) camera.quaternion.setFromEuler(camera.rotation);
-  }
-
-  function clampYawToAvoidBackWall(){
-    // Задняя стена — положение +Z (yaw ~ ±PI), запрещаем смотреть прямо назад.
-    // Ограничим yaw в пределах [-PI+lim, PI-lim], где lim ~ 0.9 радиан (~52°)
-    const lim = 0.9;
-    if (yaw > Math.PI - lim) yaw = Math.PI - lim;
-    if (yaw < -Math.PI + lim) yaw = -Math.PI + lim;
-  }
+  moveLoop();
+  animate();
 }
 
 function addRoom(){
-  const w = ROOM.w, h = ROOM.h, d = ROOM.d;
-  // Материалы по требованиям
-  const floorMat = new THREE.MeshStandardMaterial({color:0xD2B48C, side:THREE.DoubleSide}); // светлокоричневый
-  const ceilMat  = new THREE.MeshStandardMaterial({color:0xffffff, side:THREE.DoubleSide}); // белый
-  const wallMat  = new THREE.MeshStandardMaterial({color:0xE6E6E6, side:THREE.DoubleSide}); // светлосерый
-  const backMat  = new THREE.MeshStandardMaterial({color:0x555555, side:THREE.DoubleSide}); // темносерый (задняя стена)
+  const w=30,h=6,d=30;
+  const floorMat = new THREE.MeshStandardMaterial({color:0xD2B48C, side:THREE.DoubleSide});
+  const ceilMat  = new THREE.MeshStandardMaterial({color:0xffffff, side:THREE.DoubleSide});
+  const wallMat  = new THREE.MeshStandardMaterial({color:0xE6E6E6, side:THREE.DoubleSide});
+  const backMat  = new THREE.MeshStandardMaterial({color:0x555555, side:THREE.DoubleSide});
 
-  // пол
   const floor = new THREE.Mesh(new THREE.PlaneGeometry(w,d), floorMat);
   floor.rotation.x = -Math.PI/2; scene.add(floor);
 
-  // потолок
   const ceil = new THREE.Mesh(new THREE.PlaneGeometry(w,d), ceilMat);
   ceil.rotation.x = Math.PI/2; ceil.position.y = h; scene.add(ceil);
 
-  // фронтальная стена (room2) — по заданию фронтальная
   const front = new THREE.Mesh(new THREE.PlaneGeometry(w,h), wallMat);
   front.position.set(0,h/2,-d/2); scene.add(front);
 
-  // задняя стена — темносерый
   const back = new THREE.Mesh(new THREE.PlaneGeometry(w,h), backMat);
   back.position.set(0,h/2,d/2); back.rotation.y = Math.PI; scene.add(back);
 
-  // левая (room1)
   const left = new THREE.Mesh(new THREE.PlaneGeometry(d,h), wallMat);
   left.position.set(-w/2,h/2,0); left.rotation.y = Math.PI/2; scene.add(left);
 
-  // правая (room3)
   const right = new THREE.Mesh(new THREE.PlaneGeometry(d,h), wallMat);
   right.position.set(w/2,h/2,0); right.rotation.y = -Math.PI/2; scene.add(right);
 }
 
-// Загружает manifest/descriptions безопасно (если файл отсутствует, возвращает пустой объект)
-async function fetchSafe(url){
-  try{
-    const r = await fetch(url);
-    if(!r.ok) return {};
-    return r.json();
-  } catch(e){
-    return {};
-  }
-}
-
-// Добавление картин: распределение по стенам по имени файла:
-// paintingA* -> room1 (левая), paintingG* -> room2 (фронтальная), paintingS* -> room3 (правая)
-async function addPaintingsFromManifest(manifest, descriptions){
+async function addPaintings(manifest, descriptions){
   const loader = new THREE.TextureLoader();
+  const sets = [
+    { key:'room1', x:-14.9, rotY:Math.PI/2 },
+    { key:'room2', z:-14.9, rotY:0 },
+    { key:'room3', x:14.9, rotY:-Math.PI/2 }
+  ];
 
-  // Организуем списки для трёх стен, если manifest содержит их — иначе используем имени файла правило.
-  const files = [];
-  if(manifest && typeof manifest === 'object'){
-    // если manifest имеет ключи room1/2/3, взять их; иначе — соберём все ключи-значения
-    if(manifest.room1 || manifest.room2 || manifest.room3){
-      (manifest.room1 || []).forEach(f=>files.push(f));
-      (manifest.room2 || []).forEach(f=>files.push(f));
-      (manifest.room3 || []).forEach(f=>files.push(f));
-    } else {
-      // попытка: manifest может быть массив или объект mapping
-      if(Array.isArray(manifest)) manifest.forEach(f=>files.push(f));
-      else Object.values(manifest).forEach(v=>{
-        if(Array.isArray(v)) v.forEach(f=>files.push(f));
-        else if(typeof v === 'string') files.push(v);
-      });
+  for(const s of sets){
+    const list = manifest[s.key] || [];
+    let currentOffset = -10;
+    for(let i=0;i<list.length;i++){
+      const file = list[i];
+      const meta = descriptions[file] || {};
+      const width = meta.width || 1.5;
+      const height = meta.height || 1.0;
+
+      const tex = await new Promise((res,rej)=>loader.load(ASSETS+file,res,undefined,rej));
+      tex.encoding = THREE.sRGBEncoding;
+      tex.anisotropy = 16;
+      const mat = new THREE.MeshStandardMaterial({map:tex});
+      const mesh = new THREE.Mesh(new THREE.PlaneGeometry(width,height), mat);
+
+      const gap = 1.2;
+      currentOffset += width/2;
+      if(s.x!==undefined) mesh.position.x = s.x;
+      if(s.z!==undefined) mesh.position.z = s.z;
+      if(s.key==='room1'||s.key==='room3') mesh.position.z = currentOffset;
+      if(s.key==='room2') mesh.position.x = currentOffset;
+      mesh.position.y = 2;
+      mesh.rotation.y = s.rotY;
+
+      const frameGeom = new THREE.BoxGeometry(width+0.2,height+0.2,0.1);
+      const frameMat = new THREE.MeshStandardMaterial({color:0x6b4226});
+      const frame = new THREE.Mesh(frameGeom, frameMat);
+      frame.position.copy(mesh.position);
+      frame.rotation.copy(mesh.rotation);
+      frame.translateZ(-0.08);
+
+      mesh.translateZ(0.02);
+      mesh.userData = {file, meta, wall:s.key};
+      const label = createLabel(meta.title || file);
+      mesh.userData.label = label;
+
+      scene.add(frame);
+      scene.add(mesh);
+      paintingPlanes.push(mesh);
+
+      currentOffset += width/2 + gap;
     }
-  }
-
-  // если manifest пуст — попробуем простым перебором файлов известных шаблонов
-  // (но в оффлайне мы не можем прочитать директорию — оставим как есть)
-  // Готовим три набора
-  const sets = { room1: [], room2: [], room3: [] };
-  files.forEach(file=>{
-    const name = file.toLowerCase();
-    if(name.startsWith('paintinga')) sets.room1.push(file);
-    else if(name.startsWith('paintingg')) sets.room2.push(file);
-    else if(name.startsWith('paintings')) sets.room3.push(file);
-    else {
-      // попытка распределить по manifest ключам, если file path содержит /room1/ и т.п.
-      if(file.toLowerCase().includes('room1')) sets.room1.push(file);
-      else if(file.toLowerCase().includes('room2')) sets.room2.push(file);
-      else if(file.toLowerCase().includes('room3')) sets.room3.push(file);
-    }
-  });
-
-  // Если всё ещё пусто — проверяем manifest.room1/2/3 непосредственно
-  if(Object.keys(sets).every(k => sets[k].length===0)){
-    if(manifest.room1) sets.room1 = manifest.room1.slice();
-    if(manifest.room2) sets.room2 = manifest.room2.slice();
-    if(manifest.room3) sets.room3 = manifest.room3.slice();
-  }
-
-  // Параметры стен
-  const wallHalf = { x: ROOM.w/2 - 0.1, z: ROOM.d/2 - 0.1 }; // немного внутри стен
-  // helper размещения для стены вдоль X (front/back): размещаем по X
-  await placeSet(sets.room2, {axis:'x', posZ: -ROOM.d/2 + 0.01, rotY:0, name:'room2'}, loader, descriptions);
-  // left (room1): плоскость перпендикулярна X, размещаем по Z при x = -w/2
-  await placeSet(sets.room1, {axis:'z', posX: -ROOM.w/2 + 0.01, rotY: Math.PI/2, name:'room1'}, loader, descriptions);
-  // right (room3)
-  await placeSet(sets.room3, {axis:'z', posX: ROOM.w/2 - 0.01, rotY: -Math.PI/2, name:'room3'}, loader, descriptions);
-}
-
-// Размещает список изображений вдоль заданной стены
-async function placeSet(list, wall, loader, descriptions){
-  if(!list || list.length===0) return;
-  // определяем доступную длину вдоль оси
-  const avail = (wall.axis === 'x') ? ROOM.w : ROOM.d;
-  const half = avail/2;
-  // Начинаем с левого края по координатной оси (для x: от -half + margin до +half - margin)
-  let offset = -half + WALL_MARGIN;
-  const gap = 1.2;
-
-  for(let i=0;i<list.length;i++){
-    const file = list[i];
-    const meta = descriptions[file] || {};
-    const width = meta.width || 1.5;
-    const height = meta.height || 1.0;
-
-    // не ставим картины в угол: если следующая позиция выходила бы за допустимую зону — уменьшаем число картин или переносим
-    if(offset + width/2 > half - WALL_MARGIN){
-      // больше некуда — прекращаем (чтобы не залезать в угол)
-      break;
-    }
-
-    const tex = await new Promise((res,rej)=>loader.load(ASSETS + file, res, undefined, rej)).catch(()=>null);
-    if(!tex) continue;
-    tex.encoding = THREE.sRGBEncoding;
-    tex.anisotropy = 16;
-    const mat = new THREE.MeshStandardMaterial({map:tex});
-    const mesh = new THREE.Mesh(new THREE.PlaneGeometry(width, height), mat);
-
-    // позиция: в зависимости от стены
-    if(wall.axis === 'x'){
-      mesh.position.x = offset + width/2;
-      mesh.position.z = wall.posZ;
-      mesh.rotation.y = wall.rotY;
-    } else {
-      mesh.position.z = offset + width/2;
-      mesh.position.x = wall.posX;
-      mesh.rotation.y = wall.rotY;
-    }
-    // ставим центр картины на высоте глаз
-    mesh.position.y = EYE_HEIGHT;
-
-    // Рамка узкая
-    const frameGeom = new THREE.BoxGeometry(width + 0.08, height + 0.08, 0.08);
-    const frameMat = new THREE.MeshStandardMaterial({color:0x6b4226});
-    const frame = new THREE.Mesh(frameGeom, frameMat);
-    frame.position.copy(mesh.position);
-    frame.rotation.copy(mesh.rotation);
-    // немного выдаём рамку наружу стены
-    frame.translateZ(-0.04);
-
-    // отойти от стены для плоскости картины
-    mesh.translateZ(0.04);
-
-    mesh.userData = { file: file, meta: meta, wall: wall.name };
-    mesh.userData.normal = new THREE.Vector3(0,0,1).applyEuler(mesh.rotation); // наружная нормаль
-    // создаём подпись/label
-    const label = createLabel(meta.title || file);
-    mesh.userData.label = label;
-
-    scene.add(frame);
-    scene.add(mesh);
-    paintingPlanes.push(mesh);
-
-    // позиционирование для следующей картины
-    offset += width + gap;
   }
 }
 
-// Создаёт DOM-лейбл для картины
 function createLabel(text){
   const el=document.createElement('div');
   el.className='paintingLabel';
   el.innerText=text;
   document.body.appendChild(el);
-  el.style.display = labelsVisible ? 'block' : 'none';
   return el;
 }
 
-// Обработка клика/двойного клика
-function handleCanvasClick(e, isDouble){
-  // рассчитываем ray из центра экрана — поведение: клик по центру головы,
-  // но пользователь кликает в произвольное место — используем координаты клика
-  const rect = renderer.domElement.getBoundingClientRect();
-  const ndc = {
-    x: ((e.clientX - rect.left) / rect.width) * 2 - 1,
-    y: -((e.clientY - rect.top) / rect.height) * 2 + 1
-  };
-  raycaster.setFromCamera(ndc, camera);
-  const hits = raycaster.intersectObjects(paintingPlanes, true);
-  if(hits.length === 0) return;
-  const hit = hits[0].object;
+function moveLoop(){
+  requestAnimationFrame(moveLoop);
+  if(!isLocked) return;
 
-  // Показываем описание сразу при любом клике
-  showDescription(hit.userData);
+  const dir = new THREE.Vector3(move.d-move.a,0,move.s-move.w);
+  if(dir.lengthSq()>0){
+    dir.normalize();
+    const speed = 0.1;
+    const sin = Math.sin(yaw), cos = Math.cos(yaw);
+    const moveX = (dir.x*cos - dir.z*sin)*speed;
+    const moveZ = (dir.x*sin + dir.z*cos)*speed;
 
-  if(isDouble){
-    // двойной клик — приближение к картине по прямой, но останавливаемся ровно на 1 м от стены (т.е. 1 м от плоскости картины)
-    // определим нормаль плоскости (в мировых координатах)
-    const worldPos = new THREE.Vector3(); hit.getWorldPosition(worldPos);
-    // вычислим нормаль: vector from painting plane to outside (у нас в userData.normal уже есть относительная нормаль)
-    const normal = hit.userData.normal.clone().normalize();
-    // целевая позиция = позиция картины + normal * (- (1.0))  (подойти к стене, отступив 1.0m)
-    const targetPos = worldPos.clone().add(normal.clone().multiplyScalar(-1.0));
-    targetPos.y = EYE_HEIGHT;
-    // но убедимся, что camera не окажется за стеной — если это выходит за границы комнаты, сдвинем вдоль
-    moveTarget = constrainPositionToRoom(targetPos);
-    // и назначим lookTarget — камера должна перпендикулярно смотреть на картину после приведения
-    setLookTargetToObject(hit);
-  } else {
-    // одиночный клик — только поворот взгляда к картине (без движения)
-    setLookTargetToObject(hit);
+    const newX = camera.position.x + moveX;
+    const newZ = camera.position.z + moveZ;
+
+    // не выходить за стены
+    if(Math.abs(newX) < 14.5) camera.position.x = newX;
+    if(Math.abs(newZ) < 14.5) camera.position.z = newZ;
   }
 }
 
-// Устанавливает lookTarget (кватернион) так, чтобы камера поворачивалась перпендикулярно к плоскости картины.
-// Камера способна поворачиваться к картине из любой точки, даже без движения.
-function setLookTargetToObject(obj){
-  const worldPos = new THREE.Vector3(); obj.getWorldPosition(worldPos);
-  // цель взгляда — центральная точка картины (на уровне глаз)
-  const target = worldPos.clone();
-  target.y = EYE_HEIGHT;
-
-  // вычислим целевую кватернионную ориентацию: хотим, чтобы локальный -Z смотрел в сторону target
-  const desiredDir = target.clone().sub(camera.position).normalize();
-  // Обеспечим горизонтальную нормализацию: убираем Y компонент и нормализуем снова,
-  // чтобы взгляд был строго в горизонтальной плоскости
-  desiredDir.y = 0;
-  if(desiredDir.lengthSq() < 1e-6) return; // совпадают по позиции — не меняем
-  desiredDir.normalize();
-
-  // цельная ориентация: пусть локальный -Z смотрит в desiredDir
-  // построим матрицу вида, затем кватернион
-  const lookAtPos = camera.position.clone().add(desiredDir);
-  const m = new THREE.Matrix4();
-  m.lookAt(camera.position, lookAtPos, new THREE.Vector3(0,1,0));
-  const q = new THREE.Quaternion().setFromRotationMatrix(m);
-  // У нас Matrix4.lookAt задаёт -Z, поэтому q — желаемая кватернион ориентация.
-  lookQuatTarget = q;
-  // Немного скорректируем yaw и зафиксируем горизонталь
-  const e = new THREE.Euler().setFromQuaternion(q, 'YXZ');
-  yaw = e.y;
-  clampYawToAvoidBackWall();
-  // не записываем camera.rotation.x — держим горизонталь
+function onClick(){
+  if(!isLocked) return;
+  raycaster.setFromCamera({x:0,y:0},camera);
+  const hits = raycaster.intersectObjects(paintingPlanes,true);
+  if(hits.length>0){
+    const obj=hits[0].object;
+    rotateCameraToPainting(obj);
+    showDescription(obj.userData);
+  }
 }
 
-// Обновляет позиции DOM-лейблов картин
+function onDblClick(){
+  if(!isLocked) return;
+  raycaster.setFromCamera({x:0,y:0},camera);
+  const hits = raycaster.intersectObjects(paintingPlanes,true);
+  if(hits.length>0){
+    const obj=hits[0].object;
+    approachPainting(obj);
+    showDescription(obj.userData);
+  }
+}
+
+function rotateCameraToPainting(obj){
+  const pos = new THREE.Vector3(); obj.getWorldPosition(pos);
+  const dir = pos.clone().sub(camera.position).normalize();
+  const targetYaw = Math.atan2(dir.x, dir.z);
+  smoothYawTo(targetYaw);
+}
+
+function smoothYawTo(targetYaw){
+  const diff = targetYaw - yaw;
+  const normDiff = Math.atan2(Math.sin(diff), Math.cos(diff));
+  const step = normDiff * 0.15;
+  yaw += step;
+  camera.rotation.set(0, yaw, 0);
+}
+
+function approachPainting(obj){
+  const pos = new THREE.Vector3(); obj.getWorldPosition(pos);
+  const quat = new THREE.Quaternion(); obj.getWorldQuaternion(quat);
+  const forward = new THREE.Vector3(0,0,1).applyQuaternion(quat);
+  const toPos = pos.clone().add(forward.clone().multiplyScalar(-1));
+  toPos.y = 1.6;
+  currentTarget = {pos:pos,to:toPos};
+  moveToTarget = true;
+}
+
+function returnFromPainting(){
+  if(!currentTarget) return;
+  const backWallYaw = yaw + Math.PI;
+  smoothYawTo(backWallYaw);
+  const retreat = new THREE.Vector3(
+    camera.position.x - Math.sin(yaw)*2,
+    1.6,
+    camera.position.z - Math.cos(yaw)*2
+  );
+  returnTarget = retreat;
+  currentTarget = null;
+}
+
+function exitToCenter(){
+  // возврат в центр и разворот влево (к room1)
+  currentTarget = null;
+  returnTarget = new THREE.Vector3(0,1.6,0);
+  const targetYaw = Math.PI/2;
+  smoothYawTo(targetYaw);
+}
+
+function showDescription(data){
+  const box=document.getElementById('descriptionBox');
+  document.getElementById('descTitle').innerText=data.meta.title||data.file;
+  document.getElementById('descText').innerText=(data.meta.description||'Описание отсутствует')+(data.meta.author?`\nАвтор: ${data.meta.author}`:'');
+  box.style.display='block';
+  setTimeout(()=>box.style.display='none',10000);
+}
+
+function animate(){
+  requestAnimationFrame(animate);
+
+  if (currentTarget && moveToTarget) {
+    const dir = new THREE.Vector3().subVectors(currentTarget.to, camera.position);
+    if (dir.length() > 0.05) {
+      camera.position.addScaledVector(dir.normalize(), 0.05);
+      rotateCameraToPainting({getWorldPosition:(v)=>v.copy(currentTarget.pos)});
+    } else moveToTarget = false;
+  }
+
+  if (returnTarget) {
+    const dir = new THREE.Vector3().subVectors(returnTarget, camera.position);
+    if (dir.length() > 0.05) {
+      camera.position.addScaledVector(dir.normalize(), 0.04);
+    } else {
+      returnTarget = null;
+    }
+  }
+
+  updateLabels();
+  renderer.render(scene, camera);
+}
+
 function updateLabels(){
   paintingPlanes.forEach(p=>{
-    if(!p.userData.label) return;
-    if(!labelsVisible){ p.userData.label.style.display='none'; return; }
+    if(!p.userData.label||!labelsVisible)return;
     const pos=new THREE.Vector3(); p.getWorldPosition(pos);
     pos.project(camera);
     const x=(pos.x*0.5+0.5)*innerWidth;
@@ -457,59 +348,17 @@ function updateLabels(){
   });
 }
 
-// Описание (показываем блок снизу слева)
-function showDescription(data){
-  const box=document.getElementById('descriptionBox');
-  document.getElementById('descTitle').innerText = (data.meta && data.meta.title) ? data.meta.title : (data.file || '');
-  let txt = (data.meta && data.meta.description) ? data.meta.description : 'Описание отсутствует';
-  if(data.meta && data.meta.author) txt += `\nАвтор: ${data.meta.author}`;
-  document.getElementById('descText').innerText = txt;
-  box.style.display='block';
-  // скрываем через 12 секунд
-  if(window._descTimeout) clearTimeout(window._descTimeout);
-  window._descTimeout = setTimeout(()=> box.style.display='none', 12000);
-}
-
-// Сдерживает координаты камеры в пределах комнаты (чтобы не выйти за стены).
-function constrainCameraToRoom(){
-  // небольшой внутренний отступ, чтобы камера не упиралась в стену
-  const margin = 0.5;
-  const minX = -ROOM.w/2 + margin;
-  const maxX = ROOM.w/2 - margin;
-  const minZ = -ROOM.d/2 + margin;
-  const maxZ = ROOM.d/2 - margin;
-  camera.position.x = Math.max(minX, Math.min(maxX, camera.position.x));
-  camera.position.z = Math.max(minZ, Math.min(maxZ, camera.position.z));
-  camera.position.y = EYE_HEIGHT;
-}
-
-// Возвращает скорректированную позицию (не выйдет за стену)
-function constrainPositionToRoom(pos){
-  const margin = 0.6; // при приближении чуть отступаем от штатного margin
-  const minX = -ROOM.w/2 + margin;
-  const maxX = ROOM.w/2 - margin;
-  const minZ = -ROOM.d/2 + margin;
-  const maxZ = ROOM.d/2 - margin;
-  const p = pos.clone();
-  p.x = Math.max(minX, Math.min(maxX, p.x));
-  p.z = Math.max(minZ, Math.min(maxZ, p.z));
-  p.y = EYE_HEIGHT;
-  return p;
-}
-
 function onResize(){
-  camera.aspect = innerWidth/innerHeight;
+  camera.aspect=innerWidth/innerHeight;
   camera.updateProjectionMatrix();
-  renderer.setSize(innerWidth, innerHeight);
+  renderer.setSize(innerWidth,innerHeight);
 }
 
-// Кнопка показа/скрытия названий
-document.getElementById('toggleLabels').addEventListener('click', ()=>{
-  labelsVisible = !labelsVisible;
-  document.getElementById('toggleLabels').innerText = labelsVisible ? 'Скрыть названия' : 'Показать названия';
-  paintingPlanes.forEach(p=>{ if(p.userData.label) p.userData.label.style.display = labelsVisible ? 'block' : 'none'; });
-});
-
+async function fetchJSON(url){
+  const r=await fetch(url);
+  if(!r.ok) throw new Error('Ошибка загрузки '+url);
+  return r.json();
+}
 </script>
 </body>
 </html>
