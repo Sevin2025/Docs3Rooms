@@ -64,6 +64,7 @@ let labelsVisible = true;
 let currentTarget = null;
 let returnTarget = null;
 let yaw = 0;
+let moveToTarget = true; // контроль остановки
 
 init();
 
@@ -97,8 +98,10 @@ async function init(){
 
   let isLocked = false;
   renderer.domElement.addEventListener('click', ()=>{
-    isLocked = true;
-    document.getElementById("enterHint").style.display="none";
+    if(!isLocked){
+      isLocked = true;
+      document.getElementById("enterHint").style.display="none";
+    }
   });
 
   // Горизонтальный поворот
@@ -131,8 +134,8 @@ async function init(){
   }
   moveLoop();
 
-  document.addEventListener('click', ()=>onClick());
-  window.addEventListener('resize', ()=>onResize());
+  document.addEventListener('click', onClick);
+  window.addEventListener('resize', onResize);
 
   document.getElementById('toggleLabels').addEventListener('click',()=>{
     labelsVisible = !labelsVisible;
@@ -184,11 +187,13 @@ async function addPaintings(manifest, descriptions){
     for(let i=0;i<list.length;i++){
       const tex = await new Promise((res,rej)=>loader.load(ASSETS+list[i],res,undefined,rej));
       tex.encoding = THREE.sRGBEncoding;
+      tex.anisotropy = 16;
       const aspect = tex.image.width / tex.image.height;
       const h = 1.5, w = h*aspect;
       const mat = new THREE.MeshStandardMaterial({map:tex});
       const mesh = new THREE.Mesh(new THREE.PlaneGeometry(w,h), mat);
 
+      // Расставляем по центру стены, не в углах
       const spacing = 3;
       const offset = -((list.length-1)*spacing)/2 + i*spacing;
       if(s.x!==undefined) mesh.position.x = s.x;
@@ -198,13 +203,16 @@ async function addPaintings(manifest, descriptions){
       mesh.position.y = 1.6;
       mesh.rotation.y = s.rotY;
 
-      // рамка
-      const frameGeom = new THREE.BoxGeometry(w+0.12,h+0.12,0.12);
+      // Рамка чуть позади, чтобы не мигала
+      const frameGeom = new THREE.BoxGeometry(w+0.15,h+0.15,0.1);
       const frameMat = new THREE.MeshStandardMaterial({color:0x6b4226});
       const frame = new THREE.Mesh(frameGeom, frameMat);
       frame.position.copy(mesh.position);
       frame.rotation.copy(mesh.rotation);
-      frame.translateZ(-0.06);
+      frame.translateZ(-0.08);
+
+      // Картина немного выступает
+      mesh.translateZ(0.02);
 
       mesh.userData = {
         file:list[i],
@@ -229,6 +237,12 @@ function createLabel(text){
 }
 
 function onClick(){
+  // если уже есть цель, то клик — стоп
+  if (currentTarget) {
+    moveToTarget = !moveToTarget;
+    return;
+  }
+
   raycaster.setFromCamera({x:0,y:0},camera);
   const hits = raycaster.intersectObjects(paintingPlanes,true);
   if(hits.length>0 && !returnTarget){
@@ -236,9 +250,10 @@ function onClick(){
     const pos=new THREE.Vector3(); obj.getWorldPosition(pos);
     const quat=new THREE.Quaternion(); obj.getWorldQuaternion(quat);
     const forward=new THREE.Vector3(0,0,1).applyQuaternion(quat);
-    const toPos=pos.clone().add(forward.clone().multiplyScalar(-1.2));
+    const toPos=pos.clone().add(forward.clone().multiplyScalar(-2.0)); // дальше
     toPos.y=1.6;
     currentTarget={obj:obj,pos:pos,to:toPos};
+    moveToTarget = true;
     showDescription(obj.userData);
   }
 }
@@ -255,9 +270,9 @@ function animate(){
   requestAnimationFrame(animate);
 
   // === Приближение к выбранной картине ===
-  if (currentTarget) {
+  if (currentTarget && moveToTarget) {
     const dir = new THREE.Vector3().subVectors(currentTarget.to, camera.position);
-    if (dir.length() > 0.05) camera.position.addScaledVector(dir.normalize(), 0.05);
+    if (dir.length() > 0.05) camera.position.addScaledVector(dir.normalize(), 0.02); // медленнее
 
     const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
     const toTarget = currentTarget.pos.clone().sub(camera.position).normalize();
@@ -273,7 +288,7 @@ function animate(){
   if (returnTarget) {
     const dir = new THREE.Vector3().subVectors(returnTarget, camera.position);
     if (dir.length() > 0.05) {
-      camera.position.addScaledVector(dir.normalize(), 0.05);
+      camera.position.addScaledVector(dir.normalize(), 0.03);
     } else {
       returnTarget = null;
     }
