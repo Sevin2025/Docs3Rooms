@@ -6,26 +6,40 @@
 <title>3D Галерея — Одна комната</title>
 <style>
 html,body{height:100%;margin:0;overflow:hidden;font-family:Arial,sans-serif;background:#eee}
-#descriptionBox{
-  position:fixed;left:12px;bottom:12px;z-index:70;
-  background:rgba(0,0,0,0.85);color:#fff;padding:12px;border-radius:6px;
-  max-width:40%;display:none;
+canvas{display:block}
+#ui{
+  position:fixed;right:12px;top:12px;z-index:20;
+  background:rgba(255,255,255,0.95);padding:8px 12px;border-radius:8px;
+  box-shadow:0 2px 10px rgba(0,0,0,.2);
 }
+#toggleLabels{margin-top:6px;}
 .paintingLabel{
   pointer-events:none;
-  background:rgba(255,255,255,0.95);padding:4px 6px;border-radius:4px;font-size:12px;
-  position:fixed;transform:translate(-50%,-50%);white-space:nowrap;z-index:59;
+  background:rgba(255,255,255,0.95);
+  padding:4px 6px;border-radius:4px;font-size:12px;
+  position:fixed;transform:translate(-50%,-50%);
+  white-space:nowrap;z-index:10;
+}
+#descriptionBox{
+  position:fixed;left:12px;bottom:12px;z-index:30;
+  background:rgba(0,0,0,0.85);color:#fff;padding:12px;border-radius:8px;
+  max-width:40%;display:none;
 }
 #enterHint{
   position:fixed;left:50%;bottom:40px;transform:translateX(-50%);
   background:rgba(0,0,0,0.6);color:#fff;padding:8px 12px;border-radius:20px;
 }
-canvas{display:block}
 </style>
 </head>
 <body>
-<div id="descriptionBox"><div id="descTitle"></div><div id="descText" style="white-space:pre-wrap"></div></div>
-<div id="enterHint">Кликните по сцене, чтобы начать (WASD + мышь)</div>
+<div id="ui">
+  <button id="toggleLabels">Скрыть названия</button>
+</div>
+<div id="descriptionBox">
+  <div id="descTitle" style="font-weight:700;margin-bottom:6px"></div>
+  <div id="descText" style="white-space:pre-wrap"></div>
+</div>
+<div id="enterHint">Кликните по сцене для входа (WASD + мышь)</div>
 
 <script type="module">
 import * as THREE from './assets/three/three.module.js';
@@ -40,37 +54,58 @@ let paintingsGroup = new THREE.Group();
 let paintingPlanes = [];
 let INTERSECTED = null;
 let approach = null;
+let labelsVisible = true;
 
 init();
 
 async function init(){
-  const [manifest, descriptions] = await Promise.all([fetchJSON(MANIFEST), fetchJSON(DESCRIPTIONS)]);
+  const [manifest, descriptions] = await Promise.all([
+    fetchJSON(MANIFEST),
+    fetchJSON(DESCRIPTIONS)
+  ]);
 
   scene = new THREE.Scene();
   scene.background = new THREE.Color(0xdddddd);
 
   camera = new THREE.PerspectiveCamera(75, innerWidth/innerHeight, 0.1, 200);
-  camera.position.set(0, 1.6, 3); // перед фронтальной стеной, взгляд на неё
+  camera.position.set(0, 1.6, 8);
 
   renderer = new THREE.WebGLRenderer({antialias:true});
   renderer.setSize(innerWidth, innerHeight);
   renderer.outputEncoding = THREE.sRGBEncoding;
   document.body.appendChild(renderer.domElement);
 
-  const light = new THREE.AmbientLight(0xffffff, 0.9);
-  const dir = new THREE.DirectionalLight(0xffffff, 0.6);
-  dir.position.set(3,5,2);
-  scene.add(light, dir);
+  const amb = new THREE.AmbientLight(0xffffff, 0.8);
+  const dir = new THREE.DirectionalLight(0xffffff, 0.7);
+  dir.position.set(5,10,5);
+  scene.add(amb, dir);
 
   addRoom();
   await addPaintings(manifest, descriptions);
   scene.add(paintingsGroup);
 
   controls = new PointerLockControls(camera, renderer.domElement);
+  controls.pointerSpeed = 0.002;
   raycaster = new THREE.Raycaster();
   mouse = new THREE.Vector2();
 
+  // ограничение вращения камеры — только горизонтально
+  let yaw = 0;
   renderer.domElement.addEventListener('click', () => controls.lock());
+  document.addEventListener('mousemove', e=>{
+    if(!controls.isLocked) return;
+    yaw -= e.movementX * 0.002;
+    camera.rotation.set(0, yaw, 0);
+  });
+
+  document.getElementById('toggleLabels').addEventListener('click',()=>{
+    labelsVisible = !labelsVisible;
+    document.getElementById('toggleLabels').innerText = labelsVisible ? 'Скрыть названия' : 'Показать названия';
+    paintingPlanes.forEach(p=>{
+      if(p.userData.label) p.userData.label.style.display = labelsVisible ? 'block' : 'none';
+    });
+  });
+
   document.addEventListener('click', onClick);
   window.addEventListener('resize', onResize);
 
@@ -79,61 +114,66 @@ async function init(){
 }
 
 function addRoom(){
-  const w=10, h=4, d=10;
+  const w=20, h=5, d=20;
   const floorMat = new THREE.MeshStandardMaterial({color:0xD2B48C, side:THREE.DoubleSide});
-  const ceilingMat = new THREE.MeshStandardMaterial({color:0xFFFFFF, side:THREE.DoubleSide});
+  const ceilMat = new THREE.MeshStandardMaterial({color:0xffffff, side:THREE.DoubleSide});
   const wallMat = new THREE.MeshStandardMaterial({color:0xE6E6E6, side:THREE.DoubleSide});
   const backMat = new THREE.MeshStandardMaterial({color:0x555555, side:THREE.DoubleSide});
 
   const floor = new THREE.Mesh(new THREE.PlaneGeometry(w,d), floorMat);
   floor.rotation.x = -Math.PI/2; scene.add(floor);
 
-  const ceiling = new THREE.Mesh(new THREE.PlaneGeometry(w,d), ceilingMat);
-  ceiling.rotation.x = Math.PI/2; ceiling.position.y = h; scene.add(ceiling);
+  const ceil = new THREE.Mesh(new THREE.PlaneGeometry(w,d), ceilMat);
+  ceil.rotation.x = Math.PI/2; ceil.position.y = h; scene.add(ceil);
 
-  const wallFront = new THREE.Mesh(new THREE.PlaneGeometry(w,h), wallMat);
-  wallFront.position.set(0,h/2,-d/2); scene.add(wallFront);
+  const front = new THREE.Mesh(new THREE.PlaneGeometry(w,h), wallMat);
+  front.position.set(0,h/2,-d/2); scene.add(front);
 
-  const wallBack = new THREE.Mesh(new THREE.PlaneGeometry(w,h), backMat);
-  wallBack.position.set(0,h/2,d/2); wallBack.rotation.y = Math.PI; scene.add(wallBack);
+  const back = new THREE.Mesh(new THREE.PlaneGeometry(w,h), backMat);
+  back.position.set(0,h/2,d/2); back.rotation.y = Math.PI; scene.add(back);
 
-  const wallLeft = new THREE.Mesh(new THREE.PlaneGeometry(d,h), wallMat);
-  wallLeft.position.set(-w/2,h/2,0); wallLeft.rotation.y = Math.PI/2; scene.add(wallLeft);
+  const left = new THREE.Mesh(new THREE.PlaneGeometry(d,h), wallMat);
+  left.position.set(-w/2,h/2,0); left.rotation.y = Math.PI/2; scene.add(left);
 
-  const wallRight = new THREE.Mesh(new THREE.PlaneGeometry(d,h), wallMat);
-  wallRight.position.set(w/2,h/2,0); wallRight.rotation.y = -Math.PI/2; scene.add(wallRight);
+  const right = new THREE.Mesh(new THREE.PlaneGeometry(d,h), wallMat);
+  right.position.set(w/2,h/2,0); right.rotation.y = -Math.PI/2; scene.add(right);
 }
 
 async function addPaintings(manifest, descriptions){
   const loader = new THREE.TextureLoader();
-
   const sets = [
-    { key:'room1', x:-5+0.01, rotY:Math.PI/2 },
-    { key:'room2', z:-5+0.01, rotY:0 },
-    { key:'room3', x:5-0.01, rotY:-Math.PI/2 }
+    { key:'room1', x:-9.9, rotY:Math.PI/2 },
+    { key:'room2', z:-9.9, rotY:0 },
+    { key:'room3', x:9.9, rotY:-Math.PI/2 }
   ];
 
   for(const s of sets){
-    const list = manifest[s.key]||[];
+    const list = manifest[s.key] || [];
     for(let i=0;i<list.length;i++){
       const tex = await new Promise((res,rej)=>loader.load(ASSETS+list[i],res,undefined,rej));
       tex.encoding = THREE.sRGBEncoding;
-      const aspect = tex.image.width/tex.image.height;
-      const h = 1.2, w = h*aspect;
+      const aspect = tex.image.width / tex.image.height;
+      const h = 1.4, w = h*aspect;
       const mat = new THREE.MeshStandardMaterial({map:tex});
       const mesh = new THREE.Mesh(new THREE.PlaneGeometry(w,h), mat);
 
+      // равномерное размещение
+      const spacing = 3;
+      const offset = -((list.length-1)*spacing)/2 + i*spacing;
       if(s.x!==undefined) mesh.position.x = s.x;
       if(s.z!==undefined) mesh.position.z = s.z;
+      if(s.key==='room1'||s.key==='room3') mesh.position.z = offset;
+      if(s.key==='room2') mesh.position.x = offset;
       mesh.position.y = 1.6;
       mesh.rotation.y = s.rotY;
 
-      const frame = new THREE.Mesh(
-        new THREE.BoxGeometry(w+0.05,h+0.05,0.05),
-        new THREE.MeshStandardMaterial({color:0x6b4226})
-      );
+      // рамка
+      const frameGeom = new THREE.BoxGeometry(w+0.1,h+0.1,0.1);
+      const frameMat = new THREE.MeshStandardMaterial({color:0x6b4226});
+      const frame = new THREE.Mesh(frameGeom, frameMat);
       frame.position.copy(mesh.position);
       frame.rotation.copy(mesh.rotation);
+      frame.translateZ(-0.05);
 
       mesh.userData = {
         file:list[i],
@@ -154,89 +194,112 @@ async function addPaintings(manifest, descriptions){
 function createLabel(text){
   const el = document.createElement('div');
   el.className='paintingLabel';
-  el.innerText = text;
+  el.innerText=text;
   document.body.appendChild(el);
   return el;
 }
 
 function onClick(){
+  if(!controls.isLocked) return;
   raycaster.setFromCamera({x:0,y:0}, camera);
-  const intersects = raycaster.intersectObjects(paintingPlanes,true);
-  if(intersects.length){
-    const obj = intersects[0].object;
-    const pos = new THREE.Vector3(); obj.getWorldPosition(pos);
-    const quat = new THREE.Quaternion(); obj.getWorldQuaternion(quat);
+  const hits = raycaster.intersectObjects(paintingPlanes,true);
+  if(hits.length>0){
+    const obj = hits[0].object;
+    const pos = new THREE.Vector3();
+    obj.getWorldPosition(pos);
+    const quat = new THREE.Quaternion();
+    obj.getWorldQuaternion(quat);
     const forward = new THREE.Vector3(0,0,1).applyQuaternion(quat);
-    const toPos = pos.clone().add(forward.clone().multiplyScalar(-1));
+    const toPos = pos.clone().add(forward.clone().multiplyScalar(-1.2));
     toPos.y = 1.6;
-    approach = {from:camera.position.clone(), to:toPos, look:pos.clone(), t:0};
+    approach = {target:obj, to:toPos, look:pos, t:0};
     showDescription(obj.userData);
   }
 }
 
 function showDescription(data){
-  const box = document.getElementById('descriptionBox');
-  document.getElementById('descTitle').innerText = data.meta.title || data.file;
-  const txt = (data.meta.description||'Описание отсутствует') +
-              (data.meta.author?`\nАвтор: ${data.meta.author}`:'');
-  document.getElementById('descText').innerText = txt;
-  box.style.display = 'block';
-  setTimeout(()=>box.style.display='none',10000);
+  const box=document.getElementById('descriptionBox');
+  document.getElementById('descTitle').innerText=data.meta.title||data.file;
+  document.getElementById('descText').innerText=(data.meta.description||'Описание отсутствует')+
+    (data.meta.author?`\nАвтор: ${data.meta.author}`:'');
+  box.style.display='block';
+  setTimeout(()=>box.style.display='none',12000);
 }
 
 function animate(){
   requestAnimationFrame(animate);
+
+  // приближение и авто-отход
   if(approach){
-    approach.t += 0.02;
-    const t = Math.min(1, approach.t);
-    camera.position.lerpVectors(approach.from, approach.to, t);
-    const look = approach.look.clone(); look.y = 1.6;
+    approach.t+=0.02;
+    const t=Math.min(1,approach.t);
+    camera.position.lerpVectors(camera.position.clone(),approach.to,t*0.1);
+    const look=approach.look.clone(); look.y=1.6;
     camera.lookAt(look);
-    if(t>=1) approach = null;
+    // если камера отвернулась более чем на 30° — отходим
+    const forward=new THREE.Vector3(0,0,-1).applyQuaternion(camera.quaternion);
+    const toTarget=approach.look.clone().sub(camera.position).normalize();
+    const angle=THREE.MathUtils.radToDeg(forward.angleTo(toTarget));
+    if(angle>30){ approach=null; camera.position.z+=1.0; }
   }
+
   updateLabels();
-  renderer.render(scene, camera);
+  renderer.render(scene,camera);
 }
 
 function updateLabels(){
   paintingPlanes.forEach(p=>{
-    if(!p.userData.label) return;
-    const pos = new THREE.Vector3(); p.getWorldPosition(pos); pos.project(camera);
-    const x = (pos.x*0.5+0.5)*innerWidth;
-    const y = (-pos.y*0.5+0.5)*innerHeight;
-    p.userData.label.style.left = x+'px';
-    p.userData.label.style.top = y+'px';
+    if(!p.userData.label||!labelsVisible)return;
+    const pos=new THREE.Vector3();
+    p.getWorldPosition(pos);
+    pos.project(camera);
+    const x=(pos.x*0.5+0.5)*innerWidth;
+    const y=(-pos.y*0.5+0.5)*innerHeight;
+    p.userData.label.style.left=x+'px';
+    p.userData.label.style.top=y+'px';
   });
 }
 
 function onResize(){
-  camera.aspect = innerWidth/innerHeight;
+  camera.aspect=innerWidth/innerHeight;
   camera.updateProjectionMatrix();
-  renderer.setSize(innerWidth, innerHeight);
+  renderer.setSize(innerWidth,innerHeight);
 }
 
 function setupWASD(){
-  const move = {w:0,s:0,a:0,d:0};
-  const speed = 2.5;
-  document.addEventListener('keydown',e=>{if(move[e.key.toLowerCase()]!==undefined) move[e.key.toLowerCase()]=1;});
-  document.addEventListener('keyup',e=>{if(move[e.key.toLowerCase()]!==undefined) move[e.key.toLowerCase()]=0;});
+  const move={w:0,s:0,a:0,d:0};
+  const speed=2.5;
+  document.addEventListener('keydown',e=>{
+    if(move[e.key.toLowerCase()]!==undefined) move[e.key.toLowerCase()]=1;
+  });
+  document.addEventListener('keyup',e=>{
+    if(move[e.key.toLowerCase()]!==undefined) move[e.key.toLowerCase()]=0;
+  });
 
   function tick(){
     requestAnimationFrame(tick);
     if(controls.isLocked){
-      const dir = new THREE.Vector3(move.d-move.a,0,move.s-move.w);
+      const dir=new THREE.Vector3(move.d-move.a,0,move.s-move.w);
       if(dir.lengthSq()>0){
         dir.normalize();
-        const moveVec = new THREE.Vector3(dir.x,0,dir.z).multiplyScalar(speed*0.016);
-        controls.moveRight(moveVec.x);
-        controls.moveForward(moveVec.z);
+        const moveVec=new THREE.Vector3(dir.x,0,dir.z).multiplyScalar(speed*0.016);
+        const yaw=camera.rotation.y;
+        const sin=Math.sin(yaw), cos=Math.cos(yaw);
+        const dx=moveVec.x*cos - moveVec.z*sin;
+        const dz=moveVec.x*sin + moveVec.z*cos;
+        camera.position.x+=dx;
+        camera.position.z+=dz;
       }
     }
   }
   tick();
 }
 
-async function fetchJSON(url){const r=await fetch(url);if(!r.ok)throw new Error('Ошибка загрузки '+url);return r.json();}
+async function fetchJSON(url){
+  const r=await fetch(url);
+  if(!r.ok) throw new Error('Ошибка загрузки '+url);
+  return r.json();
+}
 </script>
 </body>
 </html>
