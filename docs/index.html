@@ -25,7 +25,7 @@ button:hover{background:#666}
   <div id="descText" style="white-space:pre-wrap"></div>
 </div>
 
-<div id="enterHint">Кликните по сцене для входа (WASD + мышь)</div>
+<div id="enterHint">Кликните по сцене для входа (WASD + Q/E для разворота)</div>
 
 <script type="module">
 import * as THREE from './assets/three/three.module.js';
@@ -37,9 +37,13 @@ const DESCRIPTIONS = ASSETS + 'descriptions.json';
 let scene, camera, renderer, raycaster;
 let paintingPlanes = [];
 let labelsVisible = true;
-let currentTarget = null;
-let yaw = 0, pitch = 0;
 let isLocked = false;
+
+let currentYaw = 0; // 0 — фронтальная стена, π/2 — левая, -π/2 — правая
+let targetYaw = 0;
+
+let currentTarget = null;
+let isMovingToPainting = false;
 
 init();
 
@@ -53,7 +57,8 @@ async function init(){
   scene.background = new THREE.Color(0xdddddd);
 
   camera = new THREE.PerspectiveCamera(75, innerWidth/innerHeight, 0.1, 200);
-  camera.position.set(0, 2, 0); // подняли камеру до уровня центра картин
+  camera.position.set(0, 2, 0);
+  camera.lookAt(0, 2, -10);
 
   renderer = new THREE.WebGLRenderer({antialias:true});
   renderer.setSize(innerWidth, innerHeight);
@@ -77,42 +82,39 @@ async function init(){
     }
   });
 
-  // управление мышью — свободное вращение
-  document.addEventListener('mousemove', e => {
-    if (!isLocked) return;
-    yaw -= e.movementX * 0.002;
-    pitch -= e.movementY * 0.002;
-    pitch = Math.max(-Math.PI/2, Math.min(Math.PI/2, pitch));
-    camera.rotation.set(pitch, yaw, 0);
-  });
+  document.addEventListener('click', e => handleClick(e, false));
+  document.addEventListener('dblclick', e => handleClick(e, true));
 
-  const move = {w:0,s:0,a:0,d:0};
-  document.addEventListener('keydown',e=>{
-    if(move[e.key.toLowerCase()]!==undefined) move[e.key.toLowerCase()]=1;
+  const move = {w:0,s:0,a:0,d:0,q:0,e:0};
+  document.addEventListener('keydown', e=>{
+    const k = e.key.toLowerCase();
+    if(k in move) move[k]=1;
   });
-  document.addEventListener('keyup',e=>{
-    if(move[e.key.toLowerCase()]!==undefined) move[e.key.toLowerCase()]=0;
+  document.addEventListener('keyup', e=>{
+    const k = e.key.toLowerCase();
+    if(k in move) move[k]=0;
   });
 
   function moveLoop(){
     requestAnimationFrame(moveLoop);
     if(!isLocked) return;
-    const dir = new THREE.Vector3(move.d - move.a, 0, move.s - move.w);
-    if(dir.lengthSq() > 0){
-      dir.normalize();
-      const speed = 2.5 * 0.016;
-      const sin = Math.sin(yaw), cos = Math.cos(yaw);
-      camera.position.x += (dir.x * cos - dir.z * sin) * speed;
-      camera.position.z += (dir.x * sin + dir.z * cos) * speed;
-      // ограничим перемещение внутри комнаты
-      camera.position.x = Math.max(-14, Math.min(14, camera.position.x));
-      camera.position.z = Math.max(-14, Math.min(14, camera.position.z));
-    }
+    const speed = 2.5 * 0.016;
+    const forward = new THREE.Vector3(Math.sin(currentYaw), 0, Math.cos(currentYaw));
+    const right = new THREE.Vector3(forward.z, 0, -forward.x);
+    if(move.w) camera.position.addScaledVector(forward, -speed);
+    if(move.s) camera.position.addScaledVector(forward, speed);
+    if(move.a) camera.position.addScaledVector(right, -speed);
+    if(move.d) camera.position.addScaledVector(right, speed);
+
+    // ограничим движение рамками комнаты
+    camera.position.x = Math.max(-14, Math.min(14, camera.position.x));
+    camera.position.z = Math.max(-14, Math.min(14, camera.position.z));
+
+    // повороты на 90° (Q/E)
+    if(move.q){ targetYaw = currentYaw + Math.PI/2; move.q=0; }
+    if(move.e){ targetYaw = currentYaw - Math.PI/2; move.e=0; }
   }
   moveLoop();
-
-  document.addEventListener('click', onClick);
-  window.addEventListener('resize', onResize);
 
   document.getElementById('toggleLabels').addEventListener('click',()=>{
     labelsVisible = !labelsVisible;
@@ -180,7 +182,7 @@ async function addPaintings(manifest, descriptions){
       if(s.z!==undefined) mesh.position.z = s.z;
       if(s.key==='room1'||s.key==='room3') mesh.position.z = currentOffset;
       if(s.key==='room2') mesh.position.x = currentOffset;
-      mesh.position.y = 2; // центр картин по высоте
+      mesh.position.y = 2;
       mesh.rotation.y = s.rotY;
 
       mesh.userData = {file, meta};
@@ -202,17 +204,18 @@ function createLabel(text){
   return el;
 }
 
-function onClick(e){
+function handleClick(e, isDouble){
   raycaster.setFromCamera({x:0,y:0},camera);
   const hits = raycaster.intersectObjects(paintingPlanes,true);
   if(hits.length>0){
-    const obj=hits[0].object;
-    const pos=new THREE.Vector3(); obj.getWorldPosition(pos);
-    const quat=new THREE.Quaternion(); obj.getWorldQuaternion(quat);
-    const forward=new THREE.Vector3(0,0,1).applyQuaternion(quat);
-    const toPos=pos.clone().add(forward.clone().multiplyScalar(-1.0)); // остановка в 1 м
-    toPos.y=2;
-    currentTarget={obj:obj,pos:pos,to:toPos};
+    const obj = hits[0].object;
+    const pos = new THREE.Vector3(); obj.getWorldPosition(pos);
+    const quat = new THREE.Quaternion(); obj.getWorldQuaternion(quat);
+    const forward = new THREE.Vector3(0,0,1).applyQuaternion(quat);
+    const toPos = pos.clone().add(forward.clone().multiplyScalar(-1.0)); // 1 м от стены
+    toPos.y = 2;
+    currentTarget = {obj:obj, pos:pos, to:toPos};
+    isMovingToPainting = isDouble;
     showDescription(obj.userData);
   }
 }
@@ -227,14 +230,22 @@ function showDescription(data){
 
 function animate(){
   requestAnimationFrame(animate);
-  if (currentTarget) {
-    const dir = new THREE.Vector3().subVectors(currentTarget.to, camera.position);
-    if (dir.length() > 0.05) camera.position.addScaledVector(dir.normalize(), 0.05);
+
+  // плавный поворот камеры
+  currentYaw += (targetYaw - currentYaw) * 0.1;
+  camera.rotation.set(0, currentYaw, 0);
+
+  // плавное приближение или поворот к картине
+  if (currentTarget){
     const targetDir = currentTarget.pos.clone().sub(camera.position).normalize();
     const targetYaw = Math.atan2(targetDir.x, targetDir.z);
-    yaw += (targetYaw - yaw) * 0.1;
-    camera.rotation.set(pitch, yaw, 0);
+    camera.rotation.y += (targetYaw - camera.rotation.y) * 0.1;
+    if (isMovingToPainting){
+      const dir = new THREE.Vector3().subVectors(currentTarget.to, camera.position);
+      if (dir.length() > 0.05) camera.position.addScaledVector(dir.normalize(), 0.05);
+    }
   }
+
   updateLabels();
   renderer.render(scene, camera);
 }
