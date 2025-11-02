@@ -39,9 +39,8 @@ let paintingPlanes = [];
 let labelsVisible = true;
 let isLocked = false;
 
-let currentYaw = 0; // 0 — фронтальная стена, π/2 — левая, -π/2 — правая
+let currentYaw = 0;
 let targetYaw = 0;
-
 let currentTarget = null;
 let isMovingToPainting = false;
 
@@ -106,13 +105,11 @@ async function init(){
     if(move.a) camera.position.addScaledVector(right, -speed);
     if(move.d) camera.position.addScaledVector(right, speed);
 
-    // ограничим движение рамками комнаты
-    camera.position.x = Math.max(-14, Math.min(14, camera.position.x));
-    camera.position.z = Math.max(-14, Math.min(14, camera.position.z));
+    camera.position.x = Math.max(-5.5, Math.min(5.5, camera.position.x));
+    camera.position.z = Math.max(-5.5, Math.min(5.5, camera.position.z));
 
-    // повороты на 90° (Q/E)
-    if(move.q){ targetYaw = currentYaw + Math.PI/2; move.q=0; }
-    if(move.e){ targetYaw = currentYaw - Math.PI/2; move.e=0; }
+    if(move.q){ targetYaw = Math.round((currentYaw + Math.PI/2)/ (Math.PI/2))*(Math.PI/2); move.q=0; }
+    if(move.e){ targetYaw = Math.round((currentYaw - Math.PI/2)/ (Math.PI/2))*(Math.PI/2); move.e=0; }
   }
   moveLoop();
 
@@ -128,11 +125,10 @@ async function init(){
 }
 
 function addRoom(){
-  const w=30,h=6,d=30;
+  const w=12,h=6,d=12;
   const floorMat = new THREE.MeshStandardMaterial({color:0xD2B48C, side:THREE.DoubleSide});
-  const ceilMat  = new THREE.MeshStandardMaterial({color:0xffffff, side:THREE.DoubleSide});
   const wallMat  = new THREE.MeshStandardMaterial({color:0xE6E6E6, side:THREE.DoubleSide});
-  const backMat  = new THREE.MeshStandardMaterial({color:0x555555, side:THREE.DoubleSide});
+  const ceilMat  = new THREE.MeshStandardMaterial({color:0xffffff, side:THREE.DoubleSide});
 
   const floor = new THREE.Mesh(new THREE.PlaneGeometry(w,d), floorMat);
   floor.rotation.x = -Math.PI/2; scene.add(floor);
@@ -143,7 +139,7 @@ function addRoom(){
   const front = new THREE.Mesh(new THREE.PlaneGeometry(w,h), wallMat);
   front.position.set(0,h/2,-d/2); scene.add(front);
 
-  const back = new THREE.Mesh(new THREE.PlaneGeometry(w,h), backMat);
+  const back = new THREE.Mesh(new THREE.PlaneGeometry(w,h), wallMat);
   back.position.set(0,h/2,d/2); back.rotation.y = Math.PI; scene.add(back);
 
   const left = new THREE.Mesh(new THREE.PlaneGeometry(d,h), wallMat);
@@ -156,16 +152,15 @@ function addRoom(){
 async function addPaintings(manifest, descriptions){
   const loader = new THREE.TextureLoader();
   const sets = [
-    { key:'room1', x:-14.9, rotY:Math.PI/2 },
-    { key:'room2', z:-14.9, rotY:0 },
-    { key:'room3', x:14.9, rotY:-Math.PI/2 }
+    { key:'room1', x:-5.9, rotY:Math.PI/2 },
+    { key:'room2', z:-5.9, rotY:0 },
+    { key:'room3', x:5.9, rotY:-Math.PI/2 }
   ];
 
   for(const s of sets){
     const list = manifest[s.key] || [];
-    let currentOffset = -10;
-    for(let i=0;i<list.length;i++){
-      const file = list[i];
+    let offset = 0.8; // расстояние от угла
+    for(const file of list){
       const meta = descriptions[file] || {};
       const width = meta.width || 1.5;
       const height = meta.height || 1.0;
@@ -176,12 +171,8 @@ async function addPaintings(manifest, descriptions){
       const mat = new THREE.MeshStandardMaterial({map:tex});
       const mesh = new THREE.Mesh(new THREE.PlaneGeometry(width,height), mat);
 
-      const gap = 1.2;
-      currentOffset += width/2;
-      if(s.x!==undefined) mesh.position.x = s.x;
-      if(s.z!==undefined) mesh.position.z = s.z;
-      if(s.key==='room1'||s.key==='room3') mesh.position.z = currentOffset;
-      if(s.key==='room2') mesh.position.x = currentOffset;
+      if(s.x!==undefined){ mesh.position.x = s.x; mesh.position.z = -5.9 + offset + width/2; }
+      if(s.z!==undefined){ mesh.position.z = s.z; mesh.position.x = -5.9 + offset + width/2; }
       mesh.position.y = 2;
       mesh.rotation.y = s.rotY;
 
@@ -191,7 +182,9 @@ async function addPaintings(manifest, descriptions){
 
       scene.add(mesh);
       paintingPlanes.push(mesh);
-      currentOffset += width/2 + gap;
+
+      offset += width + 0.8;
+      if(offset > 10) break; // ограничим по стене
     }
   }
 }
@@ -212,7 +205,7 @@ function handleClick(e, isDouble){
     const pos = new THREE.Vector3(); obj.getWorldPosition(pos);
     const quat = new THREE.Quaternion(); obj.getWorldQuaternion(quat);
     const forward = new THREE.Vector3(0,0,1).applyQuaternion(quat);
-    const toPos = pos.clone().add(forward.clone().multiplyScalar(-1.0)); // 1 м от стены
+    const toPos = pos.clone().add(forward.clone().multiplyScalar(-0.8)); // мин. 0.8 м
     toPos.y = 2;
     currentTarget = {obj:obj, pos:pos, to:toPos};
     isMovingToPainting = isDouble;
@@ -225,17 +218,15 @@ function showDescription(data){
   document.getElementById('descTitle').innerText=data.meta.title||data.file;
   document.getElementById('descText').innerText=(data.meta.description||'Описание отсутствует')+(data.meta.author?`\nАвтор: ${data.meta.author}`:'');
   box.style.display='block';
-  setTimeout(()=>box.style.display='none',10000);
+  setTimeout(()=>box.style.display='none',8000);
 }
 
 function animate(){
   requestAnimationFrame(animate);
 
-  // плавный поворот камеры
   currentYaw += (targetYaw - currentYaw) * 0.1;
   camera.rotation.set(0, currentYaw, 0);
 
-  // плавное приближение или поворот к картине
   if (currentTarget){
     const targetDir = currentTarget.pos.clone().sub(camera.position).normalize();
     const targetYaw = Math.atan2(targetDir.x, targetDir.z);
@@ -260,12 +251,6 @@ function updateLabels(){
     p.userData.label.style.left=x+'px';
     p.userData.label.style.top=y+'px';
   });
-}
-
-function onResize(){
-  camera.aspect=innerWidth/innerHeight;
-  camera.updateProjectionMatrix();
-  renderer.setSize(innerWidth,innerHeight);
 }
 
 async function fetchJSON(url){
