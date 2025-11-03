@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>3D Галерея — Docs3Rooms</title>
+  <title>3D gallery — Docs3Rooms</title>
   <style>
     body { margin: 0; overflow: hidden; font-family: Arial, sans-serif; }
     canvas { display: block; }
@@ -320,7 +320,7 @@
       document.getElementById('descTitle').innerText = d.meta?.title || d.file;
       document.getElementById('descText').innerText =
         (d.meta?.description || '') +
-        (d.meta?.author ? `\nАвтор: ${d.meta.author}` : '');
+        (d.meta?.author ? `\nAuthor: ${d.meta.author}` : '');
       box.style.display = 'block';
       setTimeout(() => box.style.display = 'none', 7000);
     }
