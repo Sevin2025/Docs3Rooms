@@ -74,7 +74,7 @@
     scene.background = new THREE.Color(0x111111);
 
     const camera = new THREE.PerspectiveCamera(75, innerWidth / innerHeight, 0.1, 100);
-    camera.position.set(0, 1.5, 0);  // Опущена на 0.2 м
+    camera.position.set(0, 1.5, 0);  // Камера на 1.5 м
     camera.rotation.order = 'YXZ';
 
     const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -91,21 +91,21 @@
     // === Пол — светло-коричневый ===
     const floor = new THREE.Mesh(
       new THREE.PlaneGeometry(ROOM.w, ROOM.d),
-      new THREE.MeshStandardMaterial({ color: 0xd2b48c })  // светло-коричневый
+      new THREE.MeshStandardMaterial({ color: 0xd2b48c })
     );
     floor.rotation.x = -Math.PI / 2;
     scene.add(floor);
 
-    // === Потолок — белый ===
+    // === Потолок — БЕЛЫЙ ===
     const ceiling = new THREE.Mesh(
       new THREE.PlaneGeometry(ROOM.w, ROOM.d),
-      new THREE.MeshStandardMaterial({ color: 0xffffff })  // белый
+      new THREE.MeshStandardMaterial({ color: 0xffffff })  // БЕЛЫЙ
     );
     ceiling.rotation.x = Math.PI / 2;
     ceiling.position.y = ROOM.h;
     scene.add(ceiling);
 
-    // === Стены — светло-серые ===
+    // === Стены — ВСЕ СВЕТЛО-СЕРЫЕ ===
     const walls = [
       { name: 'room1', pos: new THREE.Vector3(-ROOM.w/2, ROOM.h/2, 0), rot: Math.PI/2, length: ROOM.d, isSide: true },
       { name: 'room2', pos: new THREE.Vector3(0, ROOM.h/2, -ROOM.d/2), rot: 0, length: ROOM.w, isSide: false },
@@ -115,7 +115,7 @@
     walls.forEach(wall => {
       const geo = new THREE.PlaneGeometry(wall.length, ROOM.h);
       const mat = new THREE.MeshStandardMaterial({ 
-        color: 0xe0e0e0,  // светло-серый
+        color: 0xe0e0e0,  // СВЕТЛО-СЕРЫЙ
         side: THREE.DoubleSide 
       });
       const mesh = new THREE.Mesh(geo, mat);
@@ -167,7 +167,7 @@
       }
     }
 
-    // === Загружаем все картины из manifest ===
+    // === Загружаем все картины ===
     for (const wallName of ['room1', 'room2', 'room3']) {
       const files = manifest[wallName] || [];
       for (const file of files) {
@@ -264,7 +264,7 @@
     const mouse = new THREE.Vector2();
 
     renderer.domElement.addEventListener('mousedown', e => {
-      if (e.button !== 0) return; // только левая кнопка
+      if (e.button !== 0) return;
       mouse.x = (e.clientX / innerWidth) * 2 - 1;
       mouse.y = -(e.clientY / innerHeight) * 2 + 1;
       raycaster.setFromCamera(mouse, camera);
