@@ -74,7 +74,7 @@
     scene.background = new THREE.Color(0x111111);
 
     const camera = new THREE.PerspectiveCamera(75, innerWidth / innerHeight, 0.1, 100);
-    camera.position.set(0, 1.7, 0);
+    camera.position.set(0, 1.5, 0);  // Опущена на 0.2 м
     camera.rotation.order = 'YXZ';
 
     const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -88,23 +88,24 @@
     light.position.set(5, 5, 5);
     scene.add(light);
 
-    // === Пол и потолок ===
+    // === Пол — светло-коричневый ===
     const floor = new THREE.Mesh(
       new THREE.PlaneGeometry(ROOM.w, ROOM.d),
-      new THREE.MeshStandardMaterial({ color: 0x333333 })
+      new THREE.MeshStandardMaterial({ color: 0xd2b48c })  // светло-коричневый
     );
     floor.rotation.x = -Math.PI / 2;
     scene.add(floor);
 
+    // === Потолок — белый ===
     const ceiling = new THREE.Mesh(
       new THREE.PlaneGeometry(ROOM.w, ROOM.d),
-      new THREE.MeshStandardMaterial({ color: 0x222222 })
+      new THREE.MeshStandardMaterial({ color: 0xffffff })  // белый
     );
     ceiling.rotation.x = Math.PI / 2;
     ceiling.position.y = ROOM.h;
     scene.add(ceiling);
 
-    // === Стены ===
+    // === Стены — светло-серые ===
     const walls = [
       { name: 'room1', pos: new THREE.Vector3(-ROOM.w/2, ROOM.h/2, 0), rot: Math.PI/2, length: ROOM.d, isSide: true },
       { name: 'room2', pos: new THREE.Vector3(0, ROOM.h/2, -ROOM.d/2), rot: 0, length: ROOM.w, isSide: false },
@@ -113,7 +114,10 @@
 
     walls.forEach(wall => {
       const geo = new THREE.PlaneGeometry(wall.length, ROOM.h);
-      const mat = new THREE.MeshStandardMaterial({ color: 0xdddddd, side: THREE.DoubleSide });
+      const mat = new THREE.MeshStandardMaterial({ 
+        color: 0xe0e0e0,  // светло-серый
+        side: THREE.DoubleSide 
+      });
       const mesh = new THREE.Mesh(geo, mat);
       mesh.position.copy(wall.pos);
       mesh.rotation.y = wall.rot;
@@ -255,11 +259,12 @@
       camera.position.copy(target);
     }
 
-    // === Приближение по клику на картину ===
+    // === Приближение по удержанию мыши ===
     const raycaster = new THREE.Raycaster();
     const mouse = new THREE.Vector2();
 
     renderer.domElement.addEventListener('mousedown', e => {
+      if (e.button !== 0) return; // только левая кнопка
       mouse.x = (e.clientX / innerWidth) * 2 - 1;
       mouse.y = -(e.clientY / innerHeight) * 2 + 1;
       raycaster.setFromCamera(mouse, camera);
@@ -326,7 +331,7 @@
       requestAnimationFrame(animate);
       const delta = clock.getDelta();
 
-      camera.rotation.x = 0; // horizontal only
+      camera.rotation.x = 0; // горизонтально
 
       if (approaching) {
         const dir = targetPos.clone().sub(camera.position);
