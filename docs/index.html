@@ -60,12 +60,14 @@
     import * as THREE from './assets/three/three.module.js';
 
     // === Конфигурация комнаты ===
-    const ROOM = { w: 10, d: 8, h: 3 };
+    const ROOM = { w: 15, d: 14, h: 3 };
     const WALL_MARGIN = 0.4;
+    const INTERVAL = 0.3;
     const MIN_WALL_DIST = 0.6;
     const MIN_Y = 0.3, MAX_Y = 2.7;
     const MOVE_STEP = 0.12;
     const ROTATE_DURATION = 300;
+    const MOVE_SPEED = 3;
 
     // === Сцена ===
     const scene = new THREE.Scene();
@@ -102,19 +104,28 @@
     ceiling.position.y = ROOM.h;
     scene.add(ceiling);
 
+    // === Стены ===
+    const walls = [
+      { name: 'room1', pos: new THREE.Vector3(-ROOM.w/2, ROOM.h/2, 0), rot: Math.PI/2, length: ROOM.d, isSide: true },
+      { name: 'room2', pos: new THREE.Vector3(0, ROOM.h/2, -ROOM.d/2), rot: 0, length: ROOM.w, isSide: false },
+      { name: 'room3', pos: new THREE.Vector3(ROOM.w/2, ROOM.h/2, 0), rot: -Math.PI/2, length: ROOM.d, isSide: true }
+    ];
+
+    walls.forEach(wall => {
+      const geo = new THREE.PlaneGeometry(wall.length, ROOM.h);
+      const mat = new THREE.MeshStandardMaterial({ color: 0xdddddd, side: THREE.DoubleSide });
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.position.copy(wall.pos);
+      mesh.rotation.y = wall.rot;
+      scene.add(mesh);
+    });
+
     // === Загрузка данных ===
     const manifest = await fetch('./assets/manifest.json').then(r => r.json());
     const descriptions = await fetch('./assets/descriptions.json').then(r => r.json());
 
     const textureLoader = new THREE.TextureLoader();
     const paintingPlanes = [];
-
-    // === Стены: room1 (левая), room2 (фронт), room3 (правая) ===
-    const walls = [
-      { name: 'room1', pos: new THREE.Vector3(-ROOM.w/2, ROOM.h/2, 0), rot: Math.PI/2, length: ROOM.d, isSide: true },
-      { name: 'room2', pos: new THREE.Vector3(0, ROOM.h/2, -ROOM.d/2), rot: 0, length: ROOM.w, isSide: false },
-      { name: 'room3', pos: new THREE.Vector3(ROOM.w/2, ROOM.h/2, 0), rot: -Math.PI/2, length: ROOM.d, isSide: true }
-    ];
 
     // === Размещение картин ===
     let currentWallIndex = 0;
@@ -123,20 +134,17 @@
     function placePainting(file, meta) {
       const tex = textureLoader.load(`./assets/${file}`);
       const w = meta.width, h = meta.height;
-      const aspect = w / h;
       const geo = new THREE.PlaneGeometry(w, h);
       const mat = new THREE.MeshBasicMaterial({ map: tex });
       const painting = new THREE.Mesh(geo, mat);
       painting.userData = { file, meta };
 
-      // Циклическое размещение по стенам
       while (true) {
         const wall = walls[currentWallIndex];
         const available = wall.length - 2 * WALL_MARGIN;
         if (currentX + w <= available) {
-          const localX = -wall.length/2 + WALL_MARGIN + currentX + w/2;
-          const y = Math.min(Math.max(MIN_Y + h/2, ROOM.h/2), MAX_Y - h/2);
-
+          const localX = -wall.length / 2 + WALL_MARGIN + currentX + w / 2;
+          const y = Math.min(Math.max(MIN_Y + h / 2, ROOM.h / 2), MAX_Y - h / 2);
           if (wall.isSide) {
             painting.position.set(wall.pos.x, y, localX);
             painting.rotation.y = wall.rot;
@@ -144,13 +152,11 @@
             painting.position.set(localX, y, wall.pos.z);
             painting.rotation.y = wall.rot;
           }
-
           scene.add(painting);
           paintingPlanes.push(painting);
-          currentX += w;
+          currentX += w + INTERVAL;
           return;
         } else {
-          // Переход на следующую стену
           currentWallIndex = (currentWallIndex + 1) % walls.length;
           currentX = 0;
         }
@@ -169,6 +175,8 @@
     // === Управление ===
     let yaw = 0, isRotating = false, targetYaw = 0, rotateStartTime = 0;
     let speedMultiplier = 5;
+    let approaching = false;
+    let targetPos = new THREE.Vector3();
 
     const speedSlider = document.getElementById('speedSlider');
     const speedValue = document.getElementById('speedValue');
@@ -247,47 +255,59 @@
       camera.position.copy(target);
     }
 
-    // === Клик и двойной клик ===
+    // === Приближение по клику на картину ===
     const raycaster = new THREE.Raycaster();
     const mouse = new THREE.Vector2();
 
-    renderer.domElement.addEventListener('click', e => {
+    renderer.domElement.addEventListener('mousedown', e => {
       mouse.x = (e.clientX / innerWidth) * 2 - 1;
       mouse.y = -(e.clientY / innerHeight) * 2 + 1;
       raycaster.setFromCamera(mouse, camera);
       const hit = raycaster.intersectObjects(paintingPlanes)[0];
       if (hit) {
-        rotateToPainting(hit.object);
-        showDescription(hit.object.userData);
+        const obj = hit.object;
+        const pos = new THREE.Vector3();
+        obj.getWorldPosition(pos);
+        const normal = new THREE.Vector3();
+        obj.getWorldDirection(normal);
+        targetPos.copy(pos).add(normal.multiplyScalar(-0.8));
+        targetPos.y = camera.position.y;
+        const hw = ROOM.w/2 - MIN_WALL_DIST;
+        const hd = ROOM.d/2 - MIN_WALL_DIST;
+        targetPos.x = Math.max(-hw, Math.min(hw, targetPos.x));
+        targetPos.z = Math.max(-hd, Math.min(hd, targetPos.z));
+        approaching = true;
+        showDescription(obj.userData);
       }
     });
 
-    renderer.domElement.addEventListener('dblclick', e => {
-      mouse.x = (e.clientX / innerWidth) * 2 - 1;
-      mouse.y = -(e.clientY / innerHeight) * 2 + 1;
-      raycaster.setFromCamera(mouse, camera);
-      const hit = raycaster.intersectObjects(paintingPlanes)[0];
-      if (hit) approachPainting(hit.object);
+    renderer.domElement.addEventListener('touchstart', e => {
+      if (e.touches.length === 1) {
+        const touch = e.touches[0];
+        mouse.x = (touch.clientX / innerWidth) * 2 - 1;
+        mouse.y = -(touch.clientY / innerHeight) * 2 + 1;
+        raycaster.setFromCamera(mouse, camera);
+        const hit = raycaster.intersectObjects(paintingPlanes)[0];
+        if (hit) {
+          const obj = hit.object;
+          const pos = new THREE.Vector3();
+          obj.getWorldPosition(pos);
+          const normal = new THREE.Vector3();
+          obj.getWorldDirection(normal);
+          targetPos.copy(pos).add(normal.multiplyScalar(-0.8));
+          targetPos.y = camera.position.y;
+          const hw = ROOM.w/2 - MIN_WALL_DIST;
+          const hd = ROOM.d/2 - MIN_WALL_DIST;
+          targetPos.x = Math.max(-hw, Math.min(hw, targetPos.x));
+          targetPos.z = Math.max(-hd, Math.min(hd, targetPos.z));
+          approaching = true;
+          showDescription(obj.userData);
+        }
+      }
     });
 
-    function rotateToPainting(obj) {
-      const pos = new THREE.Vector3();
-      obj.getWorldPosition(pos);
-      const dir = pos.clone().sub(camera.position).setY(0).normalize();
-      let target = Math.atan2(dir.x, dir.z);
-      target = Math.round(target / (Math.PI/2)) * (Math.PI/2);
-      startRotate(target - yaw);
-    }
-
-    function approachPainting(obj) {
-      const pos = new THREE.Vector3();
-      obj.getWorldPosition(pos);
-      const normal = new THREE.Vector3();
-      obj.getWorldDirection(normal);
-      const target = pos.clone().add(normal.multiplyScalar(-0.8));
-      target.y = camera.position.y;
-      moveTo(target);
-    }
+    document.addEventListener('mouseup', () => approaching = false);
+    document.addEventListener('touchend', () => approaching = false);
 
     function showDescription(d) {
       const box = document.getElementById('descriptionBox');
@@ -300,8 +320,26 @@
     }
 
     // === Анимация ===
+    const clock = new THREE.Clock();
+
     function animate() {
       requestAnimationFrame(animate);
+      const delta = clock.getDelta();
+
+      camera.rotation.x = 0; // horizontal only
+
+      if (approaching) {
+        const dir = targetPos.clone().sub(camera.position);
+        const dist = dir.length();
+        if (dist > 0.05) {
+          const step = Math.min(dist, MOVE_SPEED * delta);
+          const newPos = camera.position.clone().add(dir.normalize().multiplyScalar(step));
+          moveTo(newPos);
+        } else {
+          approaching = false;
+        }
+      }
+
       renderer.render(scene, camera);
     }
 
