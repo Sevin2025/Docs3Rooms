@@ -7,42 +7,80 @@
   <style>
     body { margin: 0; overflow: hidden; font-family: Arial, sans-serif; }
     canvas { display: block; }
+    #ui {
+      position: absolute; bottom: 10px; left: 50%; transform: translateX(-50%);
+      background: rgba(0,0,0,0.7); padding: 10px; border-radius: 12px; color: white;
+      display: flex; flex-direction: column; align-items: center; gap: 10px; z-index: 100;
+    }
+    .row { display: flex; gap: 8px; }
+    button {
+      width: 50px; height: 50px; font-size: 18px; background: #444; color: white;
+      border: none; border-radius: 8px; cursor: pointer; transition: 0.2s;
+    }
+    button:active { background: #666; transform: scale(0.95); }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    #speedControl { display: flex; align-items: center; gap: 8px; font-size: 14px; }
     #descriptionBox {
-      position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%);
-      background: rgba(0,0,0,0.8); color: white; padding: 15px; border-radius: 8px;
-      max-width: 600px; display: none; z-index: 100;
+      position: absolute; top: 20px; left: 50%; transform: translateX(-50%);
+      background: rgba(0,0,0,0.8); color: white; padding: 12px; border-radius: 8px;
+      max-width: 80%; display: none; z-index: 100; text-align: center;
     }
-    #instructions {
-      position: absolute; top: 10px; left: 10px; background: rgba(0,0,0,0.7);
-      color: white; padding: 10px; border-radius: 5px; font-size: 14px; z-index: 100;
-    }
-    button { margin: 5px; padding: 8px 12px; }
   </style>
 </head>
 <body>
-  <div id="instructions">
-    <div>ПКМ — захват курсора | WASD — движение | Q/E — поворот 90° | Клик — повернуться к картине | Двойной клик — подойти</div>
-  </div>
   <div id="descriptionBox">
-    <div id="descTitle" style="font-weight:bold; margin-bottom:8px;"></div>
+    <div id="descTitle" style="font-weight:bold; margin-bottom:6px;"></div>
     <div id="descText"></div>
+  </div>
+
+  <div id="ui">
+    <!-- Повороты -->
+    <div class="row">
+      <button id="turnLeft">Q</button>
+      <button id="turnRight">E</button>
+    </div>
+
+    <!-- Движение -->
+    <div class="row">
+      <button id="moveForward">W</button>
+    </div>
+    <div class="row">
+      <button id="moveLeft">A</button>
+      <button id="moveBackward">S</button>
+      <button id="moveRight">D</button>
+    </div>
+
+    <!-- Отход от картины -->
+    <div class="row">
+      <button id="stepBack" style="background:#c33;">Назад</button>
+    </div>
+
+    <!-- Скорость -->
+    <div id="speedControl">
+      <span>Скорость:</span>
+      <input type="range" id="speedSlider" min="1" max="10" value="5" step="1">
+      <span id="speedValue">5</span>
+    </div>
   </div>
 
   <script type="module">
     import * as THREE from './assets/three/three.module.js';
-    import { PointerLockControls } from './assets/three/PointerLockControls.js';
 
-    // === Конфигурация комнаты ===
-    const ROOM = { w: 10, d: 8, h: 3 }; // ширина, глубина, высота
-    const WALL_MARGIN = 0.4; // отступ картин от углов
-    const MIN_DISTANCE_TO_WALL = 0.6;
+    // === Конфигурация ===
+    const ROOM = { w: 10, d: 8, h: 3 };
+    const WALL_MARGIN = 0.4;
+    const MIN_WALL_DIST = 0.6;
+    const MOVE_STEP = 0.15; // шаг движения за нажатие
+    const ROTATE_DURATION = 300; // мс на поворот 90°
 
-    // === Сцены, камера, рендерер ===
+    // === Сцена ===
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0x111111);
 
     const camera = new THREE.PerspectiveCamera(75, innerWidth / innerHeight, 0.1, 100);
-    camera.position.set(0, 1.7, 0); // рост человека
+    camera.position.set(0, 1.7, 0);
+    camera.rotation.order = 'YXZ';
+    camera.rotation.x = 0; // фиксируем наклон
 
     const renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setSize(innerWidth, innerHeight);
@@ -50,74 +88,68 @@
     document.body.appendChild(renderer.domElement);
 
     // === Освещение ===
-    const ambient = new THREE.AmbientLight(0xffffff, 0.6);
-    scene.add(ambient);
-    const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
-    dirLight.position.set(5, 5, 5);
-    scene.add(dirLight);
+    scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+    const light = new THREE.DirectionalLight(0xffffff, 0.8);
+    light.position.set(5, 5, 5);
+    scene.add(light);
 
     // === Пол и потолок ===
-    const floorGeo = new THREE.PlaneGeometry(ROOM.w, ROOM.d);
-    const floorMat = new THREE.MeshStandardMaterial({ color: 0x333333 });
-    const floor = new THREE.Mesh(floorGeo, floorMat);
+    const floor = new THREE.Mesh(
+      new THREE.PlaneGeometry(ROOM.w, ROOM.d),
+      new THREE.MeshStandardMaterial({ color: 0x333333 })
+    );
     floor.rotation.x = -Math.PI / 2;
-    floor.position.y = 0;
     scene.add(floor);
 
-    const ceiling = new THREE.Mesh(floorGeo, new THREE.MeshStandardMaterial({ color: 0x222222 }));
+    const ceiling = new THREE.Mesh(
+      new THREE.PlaneGeometry(ROOM.w, ROOM.d),
+      new THREE.MeshStandardMaterial({ color: 0x222222 })
+    );
     ceiling.rotation.x = Math.PI / 2;
     ceiling.position.y = ROOM.h;
     scene.add(ceiling);
 
-    // === Стены и картины ===
+    // === Загрузка описаний ===
+    let descriptions = {};
+    fetch('./assets/descriptions.json')
+      .then(r => r.ok ? r.json() : {})
+      .then(data => descriptions = data)
+      .catch(() => {});
+
+    // === Создание стен и картин ===
     const textureLoader = new THREE.TextureLoader();
     const paintingPlanes = [];
-    const descriptions = await fetchJSON('./assets/descriptions.json');
 
-    function fetchJSON(url) {
-      return fetch(url).then(r => r.ok ? r.json() : {});
-    }
-
-    function createWallWithPaintings(wallName, position, rotation, paintings, isLeftOrRight) {
-      const wallGeo = new THREE.PlaneGeometry(
-        isLeftOrRight ? ROOM.d : ROOM.w,
-        ROOM.h
-      );
-      const wallMat = new THREE.MeshStandardMaterial({ color: 0xdddddd });
-      const wall = new THREE.Mesh(wallGeo, wallMat);
-      wall.position.copy(position);
-      wall.rotation.y = rotation;
+    function createWall(name, pos, rotY, files, isSideWall) {
+      const length = isSideWall ? ROOM.d : ROOM.w;
+      const geo = new THREE.PlaneGeometry(length, ROOM.h);
+      const mat = new THREE.MeshStandardMaterial({ color: 0xdddddd });
+      const wall = new THREE.Mesh(geo, mat);
+      wall.position.copy(pos);
+      wall.rotation.y = rotY;
       scene.add(wall);
 
-      // Картины на стене
-      const wallLength = isLeftOrRight ? ROOM.d : ROOM.w;
-      const availableLength = wallLength - 2 * WALL_MARGIN;
-      const totalPaintings = paintings.length;
-      const paintingWidth = availableLength / totalPaintings;
+      const available = length - 2 * WALL_MARGIN;
+      const count = files.length;
+      const width = available / count;
 
-      paintings.forEach((file, i) => {
-        const tex = textureLoader.load(`./assets/${file}`, tex => {
-          tex.minFilter = THREE.LinearFilter;
-          tex.magFilter = THREE.LinearFilter;
-          tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
-        });
+      files.forEach((file, i) => {
+        const tex = textureLoader.load(`./assets/${file}`);
+        const aspect = 1; // можно улучшить
+        const height = width / aspect;
+        const pGeo = new THREE.PlaneGeometry(width, height);
+        const pMat = new THREE.MeshBasicMaterial({ map: tex });
+        const painting = new THREE.Mesh(pGeo, pMat);
 
-        const aspect = 1; // предполагаем квадратные картины; можно улучшить
-        const paintingHeight = paintingWidth / aspect;
-        const paintingGeo = new THREE.PlaneGeometry(paintingWidth, paintingHeight);
-        const paintingMat = new THREE.MeshBasicMaterial({ map: tex });
-        const painting = new THREE.Mesh(paintingGeo, paintingMat);
-
-        const x = -wallLength / 2 + WALL_MARGIN + i * paintingWidth + paintingWidth / 2;
-        const z = isLeftOrRight ? 0 : (rotation === 0 ? -0.01 : 0.01);
+        const x = -length/2 + WALL_MARGIN + i * width + width/2;
         const y = ROOM.h / 2;
 
-        if (isLeftOrRight) {
-          painting.position.set(position.x, y, x);
-          painting.rotation.y = rotation;
+        if (isSideWall) {
+          painting.position.set(pos.x, y, x);
+          painting.rotation.y = rotY;
         } else {
-          painting.position.set(x, y, position.z);
-          painting.rotation.y = rotation;
+          painting.position.set(x, y, pos.z);
+          painting.rotation.y = rotY;
         }
 
         painting.userData = { file, meta: descriptions[file] || {} };
@@ -126,85 +158,140 @@
       });
     }
 
-    // === Определяем картины по стенам ===
-    const wall1Paintings = ['paintingA01.jpg', 'paintingA02.jpg']; // room1 — левая
-    const wall2Paintings = ['paintingG01.jpg'];                   // room2 — фронт
-    const wall3Paintings = ['paintingS01.jpg'];                   // room3 — правая
+    createWall('room1', new THREE.Vector3(-ROOM.w/2, ROOM.h/2, 0), Math.PI/2, ['paintingA01.jpg', 'paintingA02.jpg'], true);
+    createWall('room2', new THREE.Vector3(0, ROOM.h/2, -ROOM.d/2), 0, ['paintingG01.jpg'], false);
+    createWall('room3', new THREE.Vector3(ROOM.w/2, ROOM.h/2, 0), -Math.PI/2, ['paintingS01.jpg'], true);
 
-    // room1: левая стена (x = -w/2)
-    createWallWithPaintings('room1', new THREE.Vector3(-ROOM.w/2, ROOM.h/2, 0), Math.PI / 2, wall1Paintings, true);
-    // room2: фронтальная (z = -d/2)
-    createWallWithPaintings('room2', new THREE.Vector3(0, ROOM.h/2, -ROOM.d/2), 0, wall2Paintings, false);
-    // room3: правая (x = +w/2)
-    createWallWithPaintings('room3', new THREE.Vector3(ROOM.w/2, ROOM.h/2, 0), -Math.PI / 2, wall3Paintings, true);
-
-    // === Pointer Lock Controls ===
-    const controls = new PointerLockControls(camera, document.body);
-    scene.add(controls.getObject());
-
-    document.body.addEventListener('click', () => controls.lock());
-    controls.addEventListener('lock', () => { isPointerLocked = true; });
-    controls.addEventListener('unlock', () => { isPointerLocked = false; });
-
-    let isPointerLocked = false;
-
-    // === Управление движением и поворотом ===
-    const move = { forward: 0, backward: 0, left: 0, right: 0 };
-    const rotateAnim = { target: 0, current: 0 };
+    // === Состояние ===
     let yaw = 0;
-    const rotSpeed = 3; // радиан/сек
-    const moveSpeed = 3; // м/с
+    let isRotating = false;
+    let targetYaw = 0;
+    let rotateStartTime = 0;
 
-    const keys = {};
-    document.addEventListener('keydown', e => keys[e.key.toLowerCase()] = true);
-    document.addEventListener('keyup', e => keys[e.key.toLowerCase()] = false);
-
-    // Поворот по Q/E
-    document.addEventListener('keydown', e => {
-      if (!isPointerLocked) return;
-      if (e.key === 'q') startRotateBy(-Math.PI / 2);
-      if (e.key === 'e') startRotateBy(Math.PI / 2);
+    let speedMultiplier = 5;
+    const speedSlider = document.getElementById('speedSlider');
+    const speedValue = document.getElementById('speedValue');
+    speedSlider.addEventListener('input', () => {
+      speedMultiplier = parseInt(speedSlider.value);
+      speedValue.textContent = speedMultiplier;
     });
 
-    function startRotateBy(delta) {
-      if (rotateAnim.active) return;
-      const target = yaw + delta;
-      rotateAnim.target = target;
-      rotateAnim.current = yaw;
-      rotateAnim.active = true;
-      rotateAnim.startTime = performance.now();
+    // === Кнопки ===
+    const buttons = {
+      turnLeft: document.getElementById('turnLeft'),
+      turnRight: document.getElementById('turnRight'),
+      moveForward: document.getElementById('moveForward'),
+      moveBackward: document.getElementById('moveBackward'),
+      moveLeft: document.getElementById('moveLeft'),
+      moveRight: document.getElementById('moveRight'),
+      stepBack: document.getElementById('stepBack')
+    };
+
+    // Повороты
+    buttons.turnLeft.addEventListener('click', () => startRotate(-Math.PI/2));
+    buttons.turnRight.addEventListener('click', () => startRotate(Math.PI/2));
+
+    // Движение
+    ['moveForward', 'moveBackward', 'moveLeft', 'moveRight'].forEach(id => {
+      const btn = buttons[id];
+      let interval;
+      btn.addEventListener('mousedown', () => {
+        if (isRotating) return;
+        interval = setInterval(() => moveCamera(id), 16);
+      });
+      btn.addEventListener('mouseup', () => clearInterval(interval));
+      btn.addEventListener('mouseleave', () => clearInterval(interval));
+      btn.addEventListener('touchstart', e => { e.preventDefault(); btn.dispatchEvent(new Event('mousedown')); });
+      btn.addEventListener('touchend', () => btn.dispatchEvent(new Event('mouseup')));
+    });
+
+    // Отход от картины
+    buttons.stepBack.addEventListener('click', () => {
+      const forward = new THREE.Vector3(0,0,-1).applyAxisAngle(new THREE.Vector3(0,1,0), yaw);
+      const step = forward.multiplyScalar(-1.2); // 1.2 м назад
+      moveTo(camera.position.clone().add(step));
+    });
+
+    function startRotate(delta) {
+      if (isRotating) return;
+      isRotating = true;
+      targetYaw = yaw + delta;
+      rotateStartTime = performance.now();
+      requestAnimationFrame(rotateStep);
     }
 
-    // === Raycaster для кликов ===
+    function rotateStep(now) {
+      const t = Math.min((now - rotateStartTime) / ROTATE_DURATION, 1);
+      const ease = t < 0.5 ? 2*t*t : -1+(4-2*t)*t;
+      yaw = yaw + (targetYaw - yaw) * ease;
+      camera.rotation.y = yaw;
+      if (t < 1) {
+        requestAnimationFrame(rotateStep);
+      } else {
+        yaw = targetYaw;
+        camera.rotation.y = yaw;
+        isRotating = false;
+      }
+    }
+
+    function moveCamera(direction) {
+      const forward = new THREE.Vector3(0,0,-1).applyAxisAngle(new THREE.Vector3(0,1,0), yaw);
+      const right = new THREE.Vector3(1,0,0).applyAxisAngle(new THREE.Vector3(0,1,0), yaw);
+      let delta = new THREE.Vector3();
+
+      switch (direction) {
+        case 'moveForward': delta = forward.clone().multiplyScalar(MOVE_STEP); break;
+        case 'moveBackward': delta = forward.clone().multiplyScalar(-MOVE_STEP); break;
+        case 'moveLeft': delta = right.clone().multiplyScalar(-MOVE_STEP); break;
+        case 'moveRight': delta = right.clone().multiplyScalar(MOVE_STEP); break;
+      }
+
+      delta.multiplyScalar(speedMultiplier / 5);
+      moveTo(camera.position.clone().add(delta));
+    }
+
+    function moveTo(target) {
+      const hw = ROOM.w/2 - MIN_WALL_DIST;
+      const hd = ROOM.d/2 - MIN_WALL_DIST;
+      target.x = Math.max(-hw, Math.min(hw, target.x));
+      target.z = Math.max(-hd, Math.min(hd, target.z));
+      target.y = camera.position.y;
+      camera.position.copy(target);
+    }
+
+    // === Клик и двойной клик по картине ===
     const raycaster = new THREE.Raycaster();
-    const mouse = new THREE.Vector2(0, 0);
+    const mouse = new THREE.Vector2();
+
+    renderer.domElement.addEventListener('click', onClick);
+    renderer.domElement.addEventListener('dblclick', onDblClick);
 
     function onClick(e) {
-      if (!isPointerLocked) return;
+      mouse.x = (e.clientX / innerWidth) * 2 - 1;
+      mouse.y = -(e.clientY / innerHeight) * 2 + 1;
       raycaster.setFromCamera(mouse, camera);
-      const hit = raycaster.intersectObjects(paintingPlanes, false)[0];
-      if (hit) startRotateToPainting(hit.object);
+      const hit = raycaster.intersectObjects(paintingPlanes)[0];
+      if (hit) {
+        rotateToPainting(hit.object);
+        showDescription(hit.object.userData);
+      }
     }
 
     function onDblClick(e) {
-      if (!isPointerLocked) return;
+      mouse.x = (e.clientX / innerWidth) * 2 - 1;
+      mouse.y = -(e.clientY / innerHeight) * 2 + 1;
       raycaster.setFromCamera(mouse, camera);
-      const hit = raycaster.intersectObjects(paintingPlanes, false)[0];
+      const hit = raycaster.intersectObjects(paintingPlanes)[0];
       if (hit) approachPainting(hit.object);
     }
 
-    document.addEventListener('click', onClick);
-    document.addEventListener('dblclick', onDblClick);
-
-    function startRotateToPainting(obj) {
+    function rotateToPainting(obj) {
       const pos = new THREE.Vector3();
       obj.getWorldPosition(pos);
       const dir = pos.clone().sub(camera.position).setY(0).normalize();
-      let targetYaw = Math.atan2(dir.x, dir.z);
-      // Привязка к 90°
-      targetYaw = Math.round(targetYaw / (Math.PI / 2)) * (Math.PI / 2);
-      startRotateBy(targetYaw - yaw);
-      showDescription(obj.userData);
+      let target = Math.atan2(dir.x, dir.z);
+      target = Math.round(target / (Math.PI/2)) * (Math.PI/2);
+      startRotate(target - yaw);
     }
 
     function approachPainting(obj) {
@@ -212,16 +299,9 @@
       obj.getWorldPosition(pos);
       const normal = new THREE.Vector3();
       obj.getWorldDirection(normal);
-      const targetPos = pos.clone().add(normal.clone().multiplyScalar(-0.8));
-      targetPos.y = camera.position.y;
-
-      // Ограничение
-      const hw = ROOM.w / 2 - MIN_DISTANCE_TO_WALL;
-      const hd = ROOM.d / 2 - MIN_DISTANCE_TO_WALL;
-      targetPos.x = Math.max(-hw, Math.min(hw, targetPos.x));
-      targetPos.z = Math.max(-hd, Math.min(hd, targetPos.z));
-
-      camera.position.lerp(targetPos, 0.1);
+      const target = pos.clone().add(normal.multiplyScalar(-0.8));
+      target.y = camera.position.y;
+      moveTo(target);
     }
 
     function showDescription(d) {
@@ -231,52 +311,15 @@
         (d.meta?.description || 'Описание отсутствует') +
         (d.meta?.author ? `\nАвтор: ${d.meta.author}` : '');
       box.style.display = 'block';
-      setTimeout(() => { box.style.display = 'none'; }, 5000);
+      setTimeout(() => box.style.display = 'none', 6000);
     }
 
     // === Анимация ===
-    const clock = new THREE.Clock();
-
     function animate() {
       requestAnimationFrame(animate);
-      const delta = clock.getDelta();
-
-      // Поворот
-      if (rotateAnim.active) {
-        const t = Math.min((performance.now() - rotateAnim.startTime) / 500, 1);
-        const easeT = t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t;
-        yaw = rotateAnim.current + (rotateAnim.target - rotateAnim.current) * easeT;
-        camera.rotation.y = yaw;
-        if (t >= 1) rotateAnim.active = false;
-      }
-
-      // Движение
-      if (isPointerLocked && !rotateAnim.active) {
-        const forward = new THREE.Vector3(0, 0, -1).applyAxisAngle(new THREE.Vector3(0,1,0), yaw);
-        const right = new THREE.Vector3(1, 0, 0).applyAxisAngle(new THREE.Vector3(0,1,0), yaw);
-
-        let dx = 0, dz = 0;
-        if (keys['w']) dz -= moveSpeed * delta;
-        if (keys['s']) dz += moveSpeed * delta;
-        if (keys['a']) dx -= moveSpeed * delta;
-        if (keys['d']) dx += moveSpeed * delta;
-
-        let newX = camera.position.x + forward.x * dz + right.x * dx;
-        let newZ = camera.position.z + forward.z * dz + right.z * dx;
-
-        const hw = ROOM.w / 2 - MIN_DISTANCE_TO_WALL;
-        const hd = ROOM.d / 2 - MIN_DISTANCE_TO_WALL;
-        newX = Math.max(-hw, Math.min(hw, newX));
-        newZ = Math.max(-hd, Math.min(hd, newZ));
-
-        camera.position.x = newX;
-        camera.position.z = newZ;
-      }
-
       renderer.render(scene, camera);
     }
 
-    // === Адаптация под размер окна ===
     window.addEventListener('resize', () => {
       camera.aspect = innerWidth / innerHeight;
       camera.updateProjectionMatrix();
