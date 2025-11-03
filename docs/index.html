@@ -99,13 +99,18 @@
     // === Потолок — БЕЛЫЙ ===
     const ceiling = new THREE.Mesh(
       new THREE.PlaneGeometry(ROOM.w, ROOM.d),
-      new THREE.MeshStandardMaterial({ color: 0xffffff })  // БЕЛЫЙ
+      new THREE.MeshStandardMaterial({ color: 0xffffff })
     );
     ceiling.rotation.x = Math.PI / 2;
     ceiling.position.y = ROOM.h;
     scene.add(ceiling);
 
     // === Стены — ВСЕ СВЕТЛО-СЕРЫЕ ===
+    const wallMaterial = new THREE.MeshStandardMaterial({ 
+      color: 0xe0e0e0,  // светло-серый
+      side: THREE.DoubleSide 
+    });
+
     const walls = [
       { name: 'room1', pos: new THREE.Vector3(-ROOM.w/2, ROOM.h/2, 0), rot: Math.PI/2, length: ROOM.d, isSide: true },
       { name: 'room2', pos: new THREE.Vector3(0, ROOM.h/2, -ROOM.d/2), rot: 0, length: ROOM.w, isSide: false },
@@ -114,11 +119,7 @@
 
     walls.forEach(wall => {
       const geo = new THREE.PlaneGeometry(wall.length, ROOM.h);
-      const mat = new THREE.MeshStandardMaterial({ 
-        color: 0xe0e0e0,  // СВЕТЛО-СЕРЫЙ
-        side: THREE.DoubleSide 
-      });
-      const mesh = new THREE.Mesh(geo, mat);
+      const mesh = new THREE.Mesh(geo, wallMaterial);
       mesh.position.copy(wall.pos);
       mesh.rotation.y = wall.rot;
       scene.add(mesh);
