@@ -74,7 +74,7 @@
     scene.background = new THREE.Color(0x111111);
 
     const camera = new THREE.PerspectiveCamera(75, innerWidth / innerHeight, 0.1, 100);
-    camera.position.set(0, 1.5, 0);  // Камера на 1.5 м
+    camera.position.set(0, 1.5, 0);
     camera.rotation.order = 'YXZ';
 
     const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -82,32 +82,33 @@
     renderer.setPixelRatio(devicePixelRatio);
     document.body.appendChild(renderer.domElement);
 
-    // === Освещение ===
-    scene.add(new THREE.AmbientLight(0xffffff, 0.7));
-    const light = new THREE.DirectionalLight(0xffffff, 0.8);
+    // === Освещение — МЯГКОЕ, УЮТНОЕ ===
+    scene.add(new THREE.AmbientLight(0xffffff, 0.5));  // Меньше плоского света
+
+    const light = new THREE.DirectionalLight(0xf0f0e0, 0.6);  // Тёплый, мягкий свет
     light.position.set(5, 5, 5);
     scene.add(light);
 
     // === Пол — светло-коричневый ===
     const floor = new THREE.Mesh(
       new THREE.PlaneGeometry(ROOM.w, ROOM.d),
-      new THREE.MeshStandardMaterial({ color: 0xd2b48c })  // светло-коричневый
+      new THREE.MeshStandardMaterial({ color: 0xd2b48c })
     );
     floor.rotation.x = -Math.PI / 2;
     scene.add(floor);
 
-    // === Потолок — ЧИСТО БЕЛЫЙ (отдельный материал) ===
+    // === Потолок — БЕЛЫЙ ===
     const ceiling = new THREE.Mesh(
       new THREE.PlaneGeometry(ROOM.w, ROOM.d),
-      new THREE.MeshStandardMaterial({ color: 0xffffff })  // БЕЛЫЙ
+      new THREE.MeshStandardMaterial({ color: 0xffffff })
     );
     ceiling.rotation.x = Math.PI / 2;
     ceiling.position.y = ROOM.h;
     scene.add(ceiling);
 
-    // === Стены — ВСЕ СВЕТЛО-СЕРЫЕ (отдельный материал) ===
+    // === Стены — СВЕТЛО-СЕРЫЕ ===
     const wallMaterial = new THREE.MeshStandardMaterial({ 
-      color: 0xe0e0e0,  // СВЕТЛО-СЕРЫЙ
+      color: 0xe0e0e0,
       side: THREE.DoubleSide 
     });
 
@@ -119,7 +120,7 @@
 
     walls.forEach(wall => {
       const geo = new THREE.PlaneGeometry(wall.length, ROOM.h);
-      const mesh = new THREE.Mesh(geo, wallMaterial);  // Используем только wallMaterial
+      const mesh = new THREE.Mesh(geo, wallMaterial);
       mesh.position.copy(wall.pos);
       mesh.rotation.y = wall.rot;
       scene.add(mesh);
@@ -150,7 +151,7 @@
         if (currentX + w <= available) {
           const localX = -wall.length / 2 + WALL_MARGIN + currentX + w / 2;
           const y = Math.min(Math.max(MIN_Y + h / 2, ROOM.h / 2), MAX_Y - h / 2);
-          const isSide = currentWallIndex !== 1; // room2 — фронтальная
+          const isSide = currentWallIndex !== 1;
           if (isSide) {
             painting.position.set(wall.pos.x, y, localX);
           } else {
@@ -168,7 +169,6 @@
       }
     }
 
-    // === Загружаем все картины ===
     for (const wallName of ['room1', 'room2', 'room3']) {
       const files = manifest[wallName] || [];
       for (const file of files) {
@@ -332,7 +332,7 @@
       requestAnimationFrame(animate);
       const delta = clock.getDelta();
 
-      camera.rotation.x = 0; // Только горизонтально
+      camera.rotation.x = 0;
 
       if (approaching) {
         const dir = targetPos.clone().sub(camera.position);
