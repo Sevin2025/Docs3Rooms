@@ -91,35 +91,35 @@
     // === Пол — светло-коричневый ===
     const floor = new THREE.Mesh(
       new THREE.PlaneGeometry(ROOM.w, ROOM.d),
-      new THREE.MeshStandardMaterial({ color: 0xd2b48c })
+      new THREE.MeshStandardMaterial({ color: 0xd2b48c })  // светло-коричневый
     );
     floor.rotation.x = -Math.PI / 2;
     scene.add(floor);
 
-    // === Потолок — БЕЛЫЙ ===
+    // === Потолок — ЧИСТО БЕЛЫЙ (отдельный материал) ===
     const ceiling = new THREE.Mesh(
       new THREE.PlaneGeometry(ROOM.w, ROOM.d),
-      new THREE.MeshStandardMaterial({ color: 0xffffff })
+      new THREE.MeshStandardMaterial({ color: 0xffffff })  // БЕЛЫЙ
     );
     ceiling.rotation.x = Math.PI / 2;
     ceiling.position.y = ROOM.h;
     scene.add(ceiling);
 
-    // === Стены — ВСЕ СВЕТЛО-СЕРЫЕ ===
+    // === Стены — ВСЕ СВЕТЛО-СЕРЫЕ (отдельный материал) ===
     const wallMaterial = new THREE.MeshStandardMaterial({ 
-      color: 0xe0e0e0,  // светло-серый
+      color: 0xe0e0e0,  // СВЕТЛО-СЕРЫЙ
       side: THREE.DoubleSide 
     });
 
     const walls = [
-      { name: 'room1', pos: new THREE.Vector3(-ROOM.w/2, ROOM.h/2, 0), rot: Math.PI/2, length: ROOM.d, isSide: true },
-      { name: 'room2', pos: new THREE.Vector3(0, ROOM.h/2, -ROOM.d/2), rot: 0, length: ROOM.w, isSide: false },
-      { name: 'room3', pos: new THREE.Vector3(ROOM.w/2, ROOM.h/2, 0), rot: -Math.PI/2, length: ROOM.d, isSide: true }
+      { pos: new THREE.Vector3(-ROOM.w/2, ROOM.h/2, 0), rot: Math.PI/2, length: ROOM.d },
+      { pos: new THREE.Vector3(0, ROOM.h/2, -ROOM.d/2), rot: 0, length: ROOM.w },
+      { pos: new THREE.Vector3(ROOM.w/2, ROOM.h/2, 0), rot: -Math.PI/2, length: ROOM.d }
     ];
 
     walls.forEach(wall => {
       const geo = new THREE.PlaneGeometry(wall.length, ROOM.h);
-      const mesh = new THREE.Mesh(geo, wallMaterial);
+      const mesh = new THREE.Mesh(geo, wallMaterial);  // Используем только wallMaterial
       mesh.position.copy(wall.pos);
       mesh.rotation.y = wall.rot;
       scene.add(mesh);
@@ -150,13 +150,13 @@
         if (currentX + w <= available) {
           const localX = -wall.length / 2 + WALL_MARGIN + currentX + w / 2;
           const y = Math.min(Math.max(MIN_Y + h / 2, ROOM.h / 2), MAX_Y - h / 2);
-          if (wall.isSide) {
+          const isSide = currentWallIndex !== 1; // room2 — фронтальная
+          if (isSide) {
             painting.position.set(wall.pos.x, y, localX);
-            painting.rotation.y = wall.rot;
           } else {
             painting.position.set(localX, y, wall.pos.z);
-            painting.rotation.y = wall.rot;
           }
+          painting.rotation.y = wall.rot;
           scene.add(painting);
           paintingPlanes.push(painting);
           currentX += w + INTERVAL;
@@ -332,7 +332,7 @@
       requestAnimationFrame(animate);
       const delta = clock.getDelta();
 
-      camera.rotation.x = 0; // горизонтально
+      camera.rotation.x = 0; // Только горизонтально
 
       if (approaching) {
         const dir = targetPos.clone().sub(camera.position);
